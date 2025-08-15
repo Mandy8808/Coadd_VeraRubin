@@ -48,6 +48,78 @@ class Visit():
 
     def __repr__(self):
         return f"<Visit band={self.band}, RA={self.ra_deg:.4f}, Dec={self.dec_deg:.4f}>"
+    
+    # ------------------------------------------------------------
+    # Get images overlapping a particular sky position
+    # ------------------------------------------------------------
+    def query_visit_image(self, detectors=None, timespan=None, visit_ids=None, use_patch_area=False):
+        """
+        Identify images overlapping a particular sky position and select one to inject sources into.
+
+        Parameters
+        ----------
+        detectors : int, list of int, or None
+            Detector(s) to query (default=None means all detectors)
+        timespan : tuple or None
+            Optional time range for the visit images (begin, end)
+        lazy : bool
+            If True, query returns lazy references instead of fully loaded datasets
+        visit_ids : list[int] or None
+            Optional list of visit IDs to filter
+        use_patch_area : bool
+            If True, query uses the entire patch area (like coadd construction);
+            if False, query uses the central point (RA, Dec).
+
+        Returns
+        -------
+        list
+            References to visit_image datasets matching the query
+
+        See also:
+        https://dp1.lsst.io/tutorials/notebook/202/notebook-202-2.html
+        https://dp1.lsst.io/tutorials/notebook/105/notebook-105-4.html
+        """
+
+        # Base query
+        query_parts = [f"band='{self.band}'"]
+
+        # Spatial filter: by point or by patch
+        if use_patch_area:
+            # Get tract and patch for RA/Dec
+            tract, patch = tract_patch(self.butler, self.ra_deg, self.dec_deg, sequential_index=True)
+            query_parts.append(f"tract={tract}")
+            query_parts.append(f"patch={patch}")
+        else:
+            # Point query
+            query_parts.append(f"visit_detector_region.region OVERLAPS POINT({self.ra_deg}, {self.dec_deg})")
+
+        # Detector filter (if None, query all)
+        if detectors is not None:
+            if isinstance(detectors, int):
+                query_parts.append(f"detector={detectors}")
+            else:
+                detector_str = ",".join(map(str, detectors))
+                query_parts.append(f"detector IN ({detector_str})")
+
+        # Timespan filter
+        if timespan is not None:
+            query_parts.append("visit.timespan OVERLAPS :timespan")
+        
+        # Visit ID filter
+        if visit_ids:
+            query_parts.append(f"visit.id IN ({','.join(map(str, visit_ids))})")
+
+        # Join query parts, omit empty strings
+        query = " AND ".join(query_parts)
+
+        #### Execute query
+        visit_img_refs = self.butler.query_datasets(
+            'visit_image',
+            where=query,
+            order_by='visit.timespan.begin'
+        )
+
+        return visit_img_refs
 
     # ------------------------------------------------------------
     # Get visit list for a given band
@@ -76,7 +148,7 @@ class Visit():
             'patch': my_patch
         }
     
-        # Retrieve the deep coadd from the Butler
+        # Retrieve the "type_coadd" from the Butler
         deepCoadd = self.butler.get(type_coadd, dataId=coaddId)
     
         # Extract the list of visit IDs used to construct the coadd

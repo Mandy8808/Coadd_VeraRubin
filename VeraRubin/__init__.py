@@ -14,7 +14,7 @@ from .plot.visit_plot import plot_custom_coadd, plot_original_coadd, plot_compar
 from .plot.visit_plot import normalize_image, make_rgb_image, compare_rgb_coadds
 
 # Sky
-from .sky.sky import tract_patch, patch_center
+from .sky.sky import tract_patch, patch_center, get_patch_center_radius
 
 # Visit
 from visit.visit import Visit, combine_visits_selected
@@ -30,7 +30,7 @@ __all__ = [
     'StatisticsPlots', 'mjds_to_dates', 'filt_plot', 'plot_custom_coadd', 'plot_original_coadd', 'plot_compare',
     'normalize_image', 'make_rgb_image', 'compare_rgb_coadds',
     # Sky
-    'tract_patch', 'patch_center',
+    'tract_patch', 'patch_center', 'get_patch_center_radius',
     # Visit
     'Visit', 'combine_visits_selected'
 ]

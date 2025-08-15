@@ -41,7 +41,7 @@ def tract_patch(butler, ra_deg, dec_deg, sequential_index=True):
 
     if sequential_index:
         patch_index = patch_info.getSequentialIndex()
-        patch_str = f"{patch_index}"
+        patch_str = patch_index
     else:
         x, y = patch_info.getIndex()
         patch_str = f"{x},{y}"
@@ -90,3 +90,64 @@ def patch_center(butler, tract, patch_str, sequential_index=True):
     dec_deg = sky_center.getLatitude().asDegrees()
 
     return ra_deg, dec_deg
+
+def get_patch_center_radius(butler, ra_deg, dec_deg):
+    """
+    Returns the center and approximate radius of a patch containing a given RA/Dec.
+
+    Parameters
+    ----------
+    butler : lsst.daf.persistence.Butler
+        LSST Butler used to access the skymap.
+    ra_deg : float
+        Right ascension of the point in degrees.
+    dec_deg : float
+        Declination of the point in degrees.
+
+    Returns
+    -------
+    center_coord : lsst.geom.SpherePoint
+        Center of the patch.
+    radius_deg : float
+        Circumscribed radius of the patch in degrees (approximation using the farthest corner).
+    """
+    import numpy as np
+    
+    # 1. Construct the point in spherical coordinates
+    point = lsst.geom.SpherePoint(ra_deg, dec_deg, units=lsst.geom.degrees)
+
+    # 2. Get the skymap
+    skymap = butler.get("skyMap")
+
+    # 3. Find the tract containing the point
+    tract = skymap.findTract(point)  # TractInfo object
+
+    # 4. Find the patch containing the point within the tract
+    patch = tract.findPatch(point)  # PatchInfo object
+
+    # 5. Get the WCS and bounding box of the patch
+    patch_wcs = patch.getWcs()
+    bbox = patch.getOuterBBox()
+
+    # 6. Define the corners of the patch in pixel coordinates
+    corners_px = [
+        lsst.geom.Point2D(bbox.getMin().x, bbox.getMin().y),  # bottom-left
+        lsst.geom.Point2D(bbox.getMax().x, bbox.getMin().y),  # bottom-right
+        lsst.geom.Point2D(bbox.getMax().x, bbox.getMax().y),  # top-right
+        lsst.geom.Point2D(bbox.getMin().x, bbox.getMax().y),  # top-left
+    ]
+
+    # 7. Convert pixel corners to sky coordinates
+    corners_sky = patch_wcs.pixelToSky(corners_px)  # returns list of SpherePoint
+
+    # 8. Compute the average center of the patch
+    ra_list = np.array([p.getRa().asDegrees() for p in corners_sky])
+    dec_list = np.array([p.getDec().asDegrees() for p in corners_sky])
+    center_ra = ra_list.mean()
+    center_dec = dec_list.mean()
+    center_coord = lsst.geom.SpherePoint(center_ra, center_dec, units=lsst.geom.degrees)
+
+    # 9. Compute approximate circumscribed radius (maximum distance to any corner)
+    radius_deg = max(center_coord.separation(p).asDegrees() for p in corners_sky)
+
+    return center_coord, radius_deg
