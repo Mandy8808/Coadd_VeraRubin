@@ -18,7 +18,6 @@ from scipy import ndimage
 
 
 
-
 def measure_quality(calexp):
     """
     Estimate the approximate SNR (signal-to-noise ratio) of an LSST calexp image.
@@ -159,9 +158,10 @@ def create_crowded_injection_catalog(ra_list, dec_list, stamp_paths, mags, min_s
 
 
 
-def rotate_stamp(stamp_file, rotation_angle, output_path, keep_size=False, interp_order=3, update_wcs=True):
+def apply_correction_to_stamp(stamp_file, rotation_angle, output_path,
+                              keep_size=False, interp_order=3, update_wcs=True):
     """
-    Rotate a FITS (Flexible Image Transport System) stamp image by a given angle (anticlockwise), optionally updating the WCS.
+    Rotate/Shift a FITS (Flexible Image Transport System) stamp image by a given angle (anticlockwise), optionally updating the WCS.
 
     Parameters:
     -----------
