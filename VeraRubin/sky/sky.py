@@ -151,3 +151,42 @@ def get_patch_center_radius(butler, ra_deg, dec_deg):
     radius_deg = max(center_coord.separation(p).asDegrees() for p in corners_sky)
 
     return center_coord, radius_deg
+
+import re
+
+def RA_to_degree(hours, minutes=None, seconds=None):
+    """
+    Convert Right Ascension (RA) to degrees.
+    
+    Accepts:
+        - Three numeric arguments (hours, minutes, seconds)
+        - A string like "1h3m4s" or "01:03:04"
+    """
+    # If input is a string, parse it
+    if isinstance(hours, str):
+        match = re.match(r'(\d+)[h:](\d+)[m:](\d+)', hours.strip())
+        if not match:
+            raise ValueError("RA string must be in 'hhhmms' or 'hh:mm:ss' format.")
+        hours, minutes, seconds = map(int, match.groups())
+    
+    return (hours + minutes/60 + seconds/3600) * 15
+
+
+def Dec_to_degree(degrees, minutes=None, seconds=None):
+    """
+    Convert Declination (Dec) to degrees.
+    
+    Accepts:
+        - Three numeric arguments (degrees, minutes, seconds)
+        - A string like "-12d30m0s" or "-12:30:00"
+    """
+    # If input is a string, parse it
+    if isinstance(degrees, str):
+        match = re.match(r'(-?\d+)[d:](\d+)[m:](\d+)', degrees.strip())
+        if not match:
+            raise ValueError("Dec string must be in 'ddmmss' or 'dd:mm:ss' format.")
+        degrees, minutes, seconds = map(int, match.groups())
+    
+    sign = 1 if degrees >= 0 else -1
+    degrees_abs = abs(degrees) + minutes/60 + seconds/3600
+    return sign * degrees_abs
