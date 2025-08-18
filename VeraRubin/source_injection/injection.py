@@ -5,21 +5,29 @@
 # https://dp1.lsst.io/tutorials/notebook/105/notebook-105-4.html
 # https://github.com/alxogm/SL-MEX-1/blob/main/stamp_inyect_1.ipynb
 import os, sys
+import time
+
 import numpy as np
 import astropy.units as u
-import lsst.afw.image as afwImage
-
 
 from lsst.source.injection import VisitInjectConfig, VisitInjectTask, generate_injection_catalog
 from astropy.coordinates import SkyCoord
-from astropy.table import Table
+from astropy.table import Table, vstack
 from astropy.io import fits
-from datetime import datetime
 
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from sky.sky import tract_patch, patch_center
+from sky.sky import patch_center
 from visit.visit import Visit
+
+def make_serializable(obj):
+    if isinstance(obj, (np.floating, np.float32, np.float64)):
+        return float(obj)
+    if isinstance(obj, (np.integer, np.int32, np.int64)):
+        return int(obj)
+    if isinstance(obj, (np.ndarray,)):
+        return obj.tolist()
+    return obj
 
 def measure_quality(calexp):
     """
@@ -144,14 +152,14 @@ def create_crowded_injection_catalog(
                 ra_lim=ra_lim,
                 dec_lim=dec_lim,
                 number=1,
-                seed=3210 + idx,
+                seed=f'{3210 + idx}',
                 source_type="Stamp",
                 mag=[src['mag']],
                 stamp=[src['stamp']]
             )
             cat_list.append(cat)
         
-        return Table.vstack(cat_list)
+        return vstack(cat_list)
     
     except Exception as e:
         print(f"generate_injection_catalog failed: {e}")
@@ -390,7 +398,57 @@ def inject_stamp(visit_image, inj_cat):
     injected_exposure = injected_output.output_exposure
     return injected_exposure
 
-def inject_stamp(
+
+def visit_dataset(
+        butler,
+        band,
+        loc_data,
+        use_patch_area=False,
+        detectors=None,
+        timespan=None,
+        visit_ids=None):
+    """
+    Query LSST visit-level calibrated exposures (calexp) around a location.
+
+    Parameters
+    ----------
+    butler : lsst.daf.butler.Butler
+        Butler instance to access the LSST data repository.
+    band : str
+        Filter band (e.g., "g", "r", "i").
+    loc_data : tuple
+        Location of interest:
+        - If (ra, dec) in degrees: query visits covering this position.
+        - If (tract, patch): query visits overlapping that patch.
+    use_patch_area : bool, optional
+        If True, use the full patch area for the query. 
+        If False (default), use only the central coordinate.
+    detectors : list of int, optional
+        Restrict query to specific detectors.
+    timespan : lsst.daf.butler.Timespan, optional
+        Restrict query to a specific time interval.
+    visit_ids : list of int, optional
+        Restrict query to specific visit IDs.
+
+    Returns
+    -------
+    visit_refs : list of lsst.daf.butler.DeferredDatasetHandle
+        References to the matching visit-level exposures.
+    """
+    # Create a Visit object for this band and location
+    visit_obj = Visit(loc_data=loc_data, butler=butler, band=band)
+
+    # Query matching visit images
+    visit_refs = visit_obj.query_visit_image(
+        detectors=detectors,
+        visit_ids=visit_ids,
+        use_patch_area=use_patch_area,
+        timespan=timespan
+    )
+
+    return visit_refs
+
+def main_inject_stamp(
         butler, 
         loc_data,
         band,
@@ -410,7 +468,10 @@ def inject_stamp(
         interp_order=3,
         update_wcs=True,
         c=1,
-        name='visit_image',
+        info_save_path=None,
+        visit_name="visit_image",
+        rot_name_save="stamp_rotated",
+        remove_rotated_stamps=True,
         info=True):
     """
     Inject artificial sources (stamps) into multiple LSST visit images.
@@ -450,8 +511,12 @@ def inject_stamp(
         If True, use spherical separation for spacing. Otherwise, Euclidean.
     keep_size, interp_order, update_wcs, c : passed to `apply_correction_to_stamp`
         Options for stamp rotation and resampling.
-    name : str, optional
+    info_save_path : str, optional
+        Save address for data: {}, Default = None
+    visit_name : str, optional
         Dataset type to fetch from Butler. Default "visit_image".
+    rot_name_save : str, optional
+        Name for the saved ratate stamps, Default: "stamp_rotated"
     info : bool, optional
         Print debug info.
 
@@ -461,85 +526,138 @@ def inject_stamp(
         The last visit exposure with injected sources.
     visit_calexp_data : list of lsst.afw.image.ExposureF
         List of selected visit exposures before injection.
+
+    if info_save is defined:
+        Saving injection info to {info_save}
     """
 
-    # Identify coordinates
+    # Resolve coordinates
     if sky_coordinates:
         ra_deg, dec_deg = loc_data
     else:
         tract, patch = loc_data
         ra_deg, dec_deg = patch_center(butler, tract, patch, sequential_index=True)
+    loc_data = (ra_deg, dec_deg)
+    if info:
+        print(f"[INFO] Injection on sky coordinates: RA={ra_deg}, Dec={dec_deg}")
 
     # Identify visit images around location
-    visit_obj = Visit(loc_data=(ra_deg, dec_deg), butler=butler, band=band)
-    visit_calexp_dataset = visit_obj.query_visit_image(
-        detectors=detectors,
-        visit_ids=visit_ids,
+    visit_calexp_dataset = visit_dataset(
+        butler,
+        band,
+        loc_data,
         use_patch_area=use_patch_area,
-        timespan=timespan
+        detectors=detectors,
+        timespan=timespan,
+        visit_ids=visit_ids
     )
+    if info:
+        print(f"[INFO] Found {len(visit_calexp_dataset)} visits for band={band}")
+        start = time.time()
+    
+    if info_save_path:
+        table_info = {}
+        table_info['Parameters'] = {
+            'visit_name': visit_name,
+            'use_patch_area': use_patch_area,
+            'points': list(zip(ra_list, dec_list)),
+            'detectors': detectors,
+            'timespan': timespan,
+            'visit_ids': visit_ids
+        }
+        table_info['Visit_Data'] = {
+            'RA': ra_deg, 'Dec': dec_deg,
+            'Found': len(visit_calexp_dataset), 'band': band
+            }
 
-    # Collect visit exposures
-    visit_calexp_data = []
-    visit_calexp_ids = []
+    # Load exposures, compute SNR + WCS
+    snr_list, getWcs_list = [], []
     for ref in visit_calexp_dataset:
         try:
-            exp = butler.get(name, dataId=ref.dataId)
-            visit_calexp_data.append(exp)
-            visit_calexp_ids.append(ref.dataId["visit"])
+            exp = butler.get(visit_name, dataId=ref.dataId)
+            snr_list.append(measure_quality(exp))
+            getWcs_list.append(exp.getWcs())
+            del exp  # free memory early
         except Exception as e:
-            print(f"Error fetching calexp {ref.dataId}: {e}")
+            print(f"[ERROR] Could not load exposure {ref.dataId}: {e}")
+    if info:
+        print("END: Collect visit exposures and getWcs info")
+        end = time.time()
+        print(f"Execution time: {end - start:.3f} seconds")
 
-    # Sort visits by SNR
-    snr_list = [measure_quality(calexp) for calexp in visit_calexp_data]
+    # Sort by SNR
     sorter_snr = np.argsort(snr_list)[::-1]  # descending
-    visit_calexp_data = [visit_calexp_data[i] for i in sorter_snr]
-    visit_calexp_ids = [visit_calexp_ids[i] for i in sorter_snr]
+    sort_visit_calexp_dataset = [visit_calexp_dataset[i] for i in sorter_snr]
+    sort_getWcs_list = [getWcs_list[i] for i in sorter_snr]
 
     # Optionally restrict number of visits
     if num_select is not None:
-        visit_calexp_data = visit_calexp_data[:num_select]
-        visit_calexp_ids = visit_calexp_ids[:num_select]
+        sort_visit_calexp_dataset = sort_visit_calexp_dataset[:num_select]
+        sort_getWcs_list = sort_getWcs_list[:num_select]
+    if info:
+        print(f"[INFO] Using {len(sort_visit_calexp_dataset)} visits after sorting and selection.")
+    
+    if info_save_path:
+        table_info['data_Id'] = [ref.dataId for ref in sort_visit_calexp_dataset]
+        table_info['snr'] = sorter_snr
 
     # Compute relative rotation angles w.r.t first visit
-    ref_wcs = visit_calexp_data[0].getWcs()  # referential visit
-    rotation_angle_list = [
-        calexp.getWcs().getRelativeRotationToWcs(ref_wcs).asDegrees()
-        for calexp in visit_calexp_data[1:]
-    ]
+    ref_wcs = sort_getWcs_list[0]  # referential visit
+    rotation_angle_list = [0.0]  # reference visit has 0 rotation
+    rotation_angle_list.extend([
+        wcs.getRelativeRotationToWcs(ref_wcs).asDegrees()
+        for wcs in sort_getWcs_list[1:]
+    ])
+    if info:
+        print(f"[INFO] Computed {len(rotation_angle_list)} rotation angles.")
+    
+    if info_save_path:
+        table_info['rotation_angle'] = rotation_angle_list
 
-    # Rotate stamps accordingly
-    stamp_list = [[] for _ in range(len(rotation_angle_list))]  # [[stamp1R1, stamp2R1, ...], [stamp1R2, stamp2R2, ...], ...]
+    # Rotate stamps, build catalogs, and inject in one loop
+    injected_exposures = []
     for i, angle in enumerate(rotation_angle_list):
-        for stamp_file in stamp_paths:
-            stamp_R = apply_correction_to_stamp(
+        visit_id = sort_visit_calexp_dataset[i].dataId
+        visit_image = butler.get(visit_name, dataId=visit_id)
+
+        # Rotate all stamps for this visit
+        rotated_stamps_path = [
+            apply_correction_to_stamp(
                 stamp_file,
                 angle,
+                output_path=f"{rot_name_save}_angle_{angle}_stamp_{j}.fits",
                 keep_size=keep_size,
                 interp_order=interp_order,
                 update_wcs=update_wcs,
                 c=c
             )
-            stamp_list[i].append(stamp_R)
+            for j, stamp_file in enumerate(stamp_paths)
+        ]  # [rotate_stamp1_path, rotate_stamp2_path, ...]
+        if info_save_path:
+            table_info[f'rotated stamps path angle {str(angle)}'] = rotated_stamps_path
 
-    # Build injection catalogs
-    catalog_list = []
-    for stamps in stamp_list:
+        # Create injection catalog
         inj_cat = create_crowded_injection_catalog(
             ra_list,
             dec_list,
-            stamps,
+            rotated_stamps_path,
             mags,
             min_sep=min_sep,
             separation_spherical=separation_spherical
         )
-        catalog_list.append(inj_cat)
 
-    # Perform injection
-    injected_exposure = None
-    for i, inj_cat in enumerate(catalog_list):
-        visit_image = visit_calexp_data[i]
-        injected_exposure = inject_stamp(visit_image, inj_cat)
+        # Perform injection
+        try:
+            inj_exp = inject_stamp(visit_image, inj_cat)
+            injected_exposures.append(inj_exp)
+        except Exception as e:
+            print(f"[ERROR] Injection failed for visit {visit_image.getInfo().getVisitInfo().getId()}: {e}")
+    if info:
+        print("[INFO] Injection complete.")
 
-    return injected_exposure, visit_calexp_data
-    
+    if info_save_path:
+         import json
+         with open(info_save_path, "w") as f:
+             json.dump(table_info+'.txt', f, indent=4, default=make_serializable)
+
+    return injected_exposures, sort_visit_calexp_dataset

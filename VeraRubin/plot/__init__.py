@@ -5,6 +5,8 @@ from .statistics_plot import StatisticsPlots
 from .visit_plot import mjds_to_dates, filt_plot
 from .visit_plot import plot_custom_coadd, plot_original_coadd, plot_compare
 from .visit_plot import normalize_image, make_rgb_image, compare_rgb_coadds
+from .injection_plot import injection_steps, skywcs_to_astropy
+
 __all__ = [
     'general', 'FigParam', 'LineParam', 'axesParam', 'labelParam', 'legendParam', 'fontParam', 'get_colors',
     #
@@ -14,5 +16,7 @@ __all__ = [
     #
     'plot_custom_coadd', 'plot_original_coadd', 'plot_compare',
     #
-    'normalize_image', 'make_rgb_image', 'compare_rgb_coadds'
+    'normalize_image', 'make_rgb_image', 'compare_rgb_coadds',
+    #
+    'injection_steps', 'skywcs_to_astropy'
 ]
