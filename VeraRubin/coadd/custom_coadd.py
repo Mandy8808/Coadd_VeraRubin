@@ -302,6 +302,9 @@ def custom_coadd_multiband(butler, visits_selected, loc_data,
 
 
 def load_custom_coadd_from_file(info_txt_path):
+    """
+    Load custom coadd Butler using information from a text file.
+    """
     from butler.butler import ExpButler
 
     with open(info_txt_path, "r") as f:

@@ -5,9 +5,7 @@ import os
 import numpy as np
 
 from lsst.afw.image import ExposureF, MaskedImageF
-#from lsst.afw.math import Warper, WarperConfig
 from lsst.afw.math import warpExposure, WarpingControl
-from lsst.afw.image.pixel import SinglePixelF
 
 def load_exposures(paths_or_exposures):
     """
@@ -110,3 +108,5 @@ def coadd_exposures_pipeline(exposures, ref_exp=None, warping_kernel="lanczos3",
 # exposures_list = ["visit1.fits", "visit2.fits", exposure_obj3]
 # exposures = load_exposures(exposures_list)
 # coadded_exp = coadd_exposures_wcs(exposures, save_path="./coadds", coadd_name="band_r_coadd.fits")
+
+enumerate()
