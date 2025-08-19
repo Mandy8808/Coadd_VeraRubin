@@ -48,11 +48,13 @@ def fix_wcsaxes_labels(ax):
             # fallback: just leave as degrees
             coord.set_format_unit(u.deg)
             coord.set_axislabel(ctype)
+    return None
 
 def injection_steps(before, after, points, diference=True,
                     grid=False, percentiles=[5, 95],
                     cutout_radius_arcsec=None,
-                    xlim_world=None, ylim_world=None):
+                    xlim_world=None, ylim_world=None,
+                    save_path=None):
     """
     Compare exposures before/after injection and plot with WCS coordinates.
 
@@ -77,6 +79,8 @@ def injection_steps(before, after, points, diference=True,
         Manual RA limits (deg), e.g. (RA_min, RA_max).
     ylim_world : tuple, optional
         Manual Dec limits (deg), e.g. (Dec_min, Dec_max).
+    save_path : str, optional
+        If provided, the figure will be saved at this path instead of being displayed.
     """
     labelpoint = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
@@ -164,4 +168,156 @@ def injection_steps(before, after, points, diference=True,
             ax.set_ylim(*ylim_world)
 
     plt.tight_layout()
+    
+    # Save or show the figure depending on argument
+    if save_path is not None:
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"[INFO] Figure saved to {save_path}")
+    else:
+        plt.show()
+
+    # Free memory after plotting
+    plt.close(fig)
+    return None
+
+def pixel_intensity(image_array, y_positions_pixel, save_path=None):
+    """
+    Plot the pixel intensity along the X-axis for given Y-pixel positions in an image.
+
+    Parameters
+    ----------
+    image_array : numpy.ndarray
+        2D image array containing pixel intensity values.
+    y_positions_pixel : int or list of int
+        Single Y-pixel position or a list of Y-pixel positions to analyze.
+    save_path : str, optional
+        If provided, the figure will be saved at this path instead of being displayed.
+    """
+
+    # Ensure y_positions_pixel is a list (even if a single int was passed)
+    if isinstance(y_positions_pixel, int):
+        y_positions_pixel = [y_positions_pixel]
+
+    npanels = len(y_positions_pixel)  # number of subplots to create
+
+    # Create subplots: one row with npanels columns
+    fig, axes = plt.subplots(1, npanels, figsize=(npanels * 6, 4))
+
+    # Ensure axes is iterable (if npanels == 1, make it a list)
+    if npanels == 1:
+        axes = [axes]
+
+    # Loop over each subplot axis
+    for i, ax in enumerate(axes):
+        y_pixel = y_positions_pixel[i]
+
+        # Plot the pixel intensity along the X-axis for the given Y position
+        ax.plot(image_array[y_pixel, :], label=rf'Y-Pixel: {y_pixel}')
+
+        # Add legend without frame
+        ax.legend(frameon=False)
+
+        # Label axes
+        ax.set_xlabel(r'X-pixel')
+        ax.set_ylabel(r'Pixel Intensity')
+
+    # Adjust layout for better spacing
+    plt.tight_layout()
+
+    # Save or show the figure depending on argument
+    if save_path is not None:
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"[INFO] Figure saved to {save_path}")
+    else:
+        plt.show()
+
+    # Free memory after plotting
+    plt.close(fig)
+    return None
+
+def plot_exposures_and_coadd(exposures,
+                             coadd_exp=None,
+                             save_path=None,
+                             show_second_row=False,
+                             exposures_scale='zscale_asinh',
+                             coadd_exp_scale='zscale_asinh'):
+    """
+    Plot individual exposures and optionally the coadd result, with optional variance row.
+
+    Parameters
+    ----------
+    exposures : list of ExposureF
+        List of exposures to plot.
+    coadd_exp : ExposureF, optional
+        Final coadded exposure to plot alongside.
+    save_path : str, optional
+        If provided, saves the figure to this path.
+    show_second_row : bool
+        If True, adds a second row showing variance maps.
+    exposures_scale : str
+        Scale used to normalize the exposures images: 'zscale_asinh' or 'percentile', default: 'zscale_asinh'.
+    coadd_exp_scale : str
+        Scale used to normalize the coadd image: 'zscale_asinh' or 'percentile', default: 'zscale_asinh'.
+    """
+    from astropy.visualization import ZScaleInterval, ImageNormalize, AsinhStretch
+    
+    n_exps = len(exposures)
+    nrows = 2 if show_second_row else 1
+    total_plots = n_exps + (1 if coadd_exp is not None else 0)
+
+    # Helper: show science or variance image
+    def show_image(ax, exp, title, normalization, cmap,
+                   percentiles=[1, 99], origin='lower', image=True):
+        img = exp.getMaskedImage().getImage().getArray() if image else exp.getMaskedImage().getVariance().getArray()
+        if normalization == 'zscale_asinh':
+            norm = ImageNormalize(img, interval=ZScaleInterval(), stretch=AsinhStretch())
+            vmin, vmax = None, None
+        elif normalization == 'percentile':
+            norm = None
+            vmin, vmax = np.percentile(img, percentiles[0]), np.percentile(img, percentiles[1])
+        else:
+            raise ValueError(f"Unknown normalization: {normalization}")
+
+        im = ax.imshow(img, origin=origin, cmap=cmap, norm=norm, vmin=vmin, vmax=vmax)
+        ax.set_title(title, fontsize=12)
+        ax.axis("off")
+        return im
+    
+    fig, axes = plt.subplots(nrows=nrows, ncols=total_plots,
+                             figsize=(4*total_plots, 4*nrows))
+
+    # Ensure axes is always 2D for consistent indexing
+    if nrows == 1:
+        axes = np.expand_dims(axes, axis=0)
+
+    # Plot exposures
+    for i in range(n_exps):
+        show_image(axes[0, i], exposures[i],
+                   f"Exposure {i+1} ({exposures_scale})",
+                   normalization=exposures_scale, cmap="gray")
+        if show_second_row:
+            show_image(axes[1, i], exposures[i],
+                       f"Var {i+1} (Percentile)", image=False,
+                       normalization='percentile', cmap="inferno")
+
+    # Plot coadd, if provided
+    if coadd_exp is not None:
+        show_image(axes[0, -1], coadd_exp,
+                   f"Coadd ({coadd_exp_scale})",
+                   normalization=coadd_exp_scale, cmap="gray")
+        if show_second_row:
+            show_image(axes[1, -1], coadd_exp,
+                       "Coadd Var (Percentile)", image=False,
+                       normalization='percentile', cmap="inferno")
+        
+    plt.tight_layout()
+
+    # Save or show
+    if save_path is not None:
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"[INFO] Figure saved to {save_path}")
+    else:
+        plt.show()
+
+    plt.close(fig)  # free memory
     return None
