@@ -179,7 +179,8 @@ def injection_steps(before, after, points, diference=True,
     plt.close(fig)
     return None
 
-def pixel_intensity(image_array, y_positions_pixel, save_path=None):
+def pixel_intensity(image_array, y_positions_pixel, image_ref=False,
+                    save_path=None, colormap='tab10'):
     """
     Plot the pixel intensity along the X-axis for given Y-pixel positions in an image.
 
@@ -189,36 +190,61 @@ def pixel_intensity(image_array, y_positions_pixel, save_path=None):
         2D image array containing pixel intensity values.
     y_positions_pixel : int or list of int
         Single Y-pixel position or a list of Y-pixel positions to analyze.
+    image_ref : bool
+        If True, the reference image will be shown at the first panel.
     save_path : str, optional
         If provided, the figure will be saved at this path instead of being displayed.
+    colormap : str
+        Name of the matplotlib colormap to assign distinct colors to each curve.
     """
+    from matplotlib import cm
 
     # Ensure y_positions_pixel is a list (even if a single int was passed)
     if isinstance(y_positions_pixel, int):
         y_positions_pixel = [y_positions_pixel]
 
-    npanels = len(y_positions_pixel)  # number of subplots to create
-
+    # number of subplots to create: ref + len(y_positions_pixel)
+    npanels = 1 + len(y_positions_pixel) if image_ref else len(y_positions_pixel)
+      
     # Create subplots: one row with npanels columns
-    fig, axes = plt.subplots(1, npanels, figsize=(npanels * 6, 4))
+    fig, axes = plt.subplots(1, npanels, figsize=(npanels * 5, 4))
 
     # Ensure axes is iterable (if npanels == 1, make it a list)
     if npanels == 1:
         axes = [axes]
+    
+    # Colormap
+    cmap = cm.get_cmap(colormap, len(y_positions_pixel))
+    colors = []
 
     # Loop over each subplot axis
-    for i, ax in enumerate(axes):
+    axes_intensity = axes[1:] if image_ref else axes
+    colors = []
+    for i, ax in enumerate(axes_intensity):
         y_pixel = y_positions_pixel[i]
 
         # Plot the pixel intensity along the X-axis for the given Y position
-        ax.plot(image_array[y_pixel, :], label=rf'Y-Pixel: {y_pixel}')
+        color = cmap(i)
+        ax.plot(image_array[y_pixel, :], label=rf'Y-Pixel: {y_pixel}', color=color)  # line = 
+        colors.append(color)  # Save color for later use # old line[0].get_color()
 
         # Add legend without frame
         ax.legend(frameon=False)
 
         # Label axes
         ax.set_xlabel(r'X-pixel')
-        ax.set_ylabel(r'Pixel Intensity')
+        ax.set_ylabel(r'Pixel Intensity Profile')
+    
+    if image_ref:
+        vmin, vmax = np.percentile(image_array, 1), np.percentile(image_array, 99)
+        axes[0].imshow(image_array, origin='lower', cmap="gray", vmin=vmin, vmax=vmax)
+
+        # draw the horizontal lines corresponding to the Y-pixel positions
+        for (y_pixel, color) in zip(y_positions_pixel, colors):
+            axes[0].axhline(y=y_pixel, color=color, linestyle='--', linewidth=2)
+        
+        axes[0].set_title("Reference Image", fontsize=12)
+        axes[0].axis("off")
 
     # Adjust layout for better spacing
     plt.tight_layout()

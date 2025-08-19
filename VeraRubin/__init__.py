@@ -5,7 +5,7 @@ from .butler.butler import ExpButler
 
 # Coadd
 from .coadd.custom_coadd import custom_coadd_filter, custom_coadd_multiband, load_custom_coadd_from_file
-from .coadd.custom_inject_coadd import coadd_exposures_wcs, load_exposures
+from .coadd.custom_inject_coadd import coadd_exposures_pipeline, load_exposures
 
 # Plots
 from .plot.plot_conf import general, FigParam, LineParam, axesParam, labelParam, legendParam, fontParam, get_colors
@@ -34,7 +34,7 @@ __all__ = [
     'ExpButler',
     # Coadd
     'custom_coadd_filter', 'custom_coadd_multiband', 'load_custom_coadd_from_file',
-    'coadd_exposures_wcs', 'load_exposures',
+    'coadd_exposures_pipeline', 'load_exposures',
     # Plots
     'general', 'FigParam', 'LineParam', 'axesParam', 'labelParam', 'legendParam', 'fontParam', 'get_colors',
     'StatisticsPlots', 'mjds_to_dates', 'filt_plot', 'plot_custom_coadd', 'plot_original_coadd', 'plot_compare',

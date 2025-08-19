@@ -20,7 +20,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from sky.sky import patch_center
 from visit.visit import Visit
 
-###################################################################################################
 def make_serializable(obj):
     if isinstance(obj, (np.floating, np.float32, np.float64)):
         return float(obj)
@@ -517,19 +516,22 @@ def main_inject_stamp(
     visit_name : str, optional
         Dataset type to fetch from Butler. Default "visit_image".
     rot_name_save : str, optional
-        Name for the saved ratate stamps, Default: "stamp_rotated"
+        Name for the saved rotated stamps, Default: "stamp_rotated"
+    remove_rotated_stamps : bool, optional
+        If True (default), remove the rotated stamp FITS files after injection.  
+        Set to False to keep them for inspection.
     info : bool, optional
         Print debug info.
 
     Returns
     -------
     injected_exposure : lsst.afw.image.ExposureF
-        The last visit exposure with injected sources.
-    visit_calexp_data : list of lsst.afw.image.ExposureF
-        List of selected visit exposures before injection.
+        List of exposures with injected sources (in sorter order).
 
-    if info_save is defined:
-        Saving injection info to {info_save}
+    Notes
+    -----
+    If `info_save_path` is defined, metadata and injection details will be 
+    saved to `{info_save_path}.txt`.
     """
 
     # Resolve coordinates
@@ -599,7 +601,6 @@ def main_inject_stamp(
         print(f"[INFO] Using {len(sort_visit_calexp_dataset)} visits after sorting and selection.")
     
     if info_save_path:
-        table_info['data_Id'] = [ref.dataId for ref in sort_visit_calexp_dataset]
         table_info['snr'] = sorter_snr
 
     # Compute relative rotation angles w.r.t first visit
@@ -651,14 +652,31 @@ def main_inject_stamp(
         try:
             inj_exp = inject_stamp(visit_image, inj_cat)
             injected_exposures.append(inj_exp)
+            if info_save_path:
+                table_info.setdefault('data_Id', {})[f'{i}'] = dict(visit_id.to_simple())
         except Exception as e:
             print(f"[ERROR] Injection failed for visit {visit_image.getInfo().getVisitInfo().getId()}: {e}")
+        finally:
+            if remove_rotated_stamps:
+                for path in rotated_stamps_path:
+                    if os.path.exists(path):
+                        os.remove(path)
     if info:
         print("[INFO] Injection complete.")
 
     if info_save_path:
          import json
-         with open(info_save_path, "w") as f:
-             json.dump(table_info+'.txt', f, indent=4, default=make_serializable)
+         with open(info_save_path+'.txt', "w") as f:
+             json.dump(table_info, f, indent=4, default=make_serializable)
 
-    return injected_exposures, sort_visit_calexp_dataset
+    if info_save_path:
+        # Make the directory if it doesn't exist
+        dir_name = os.path.dirname(info_save_path)
+        if dir_name:  # avoid make a folder if info_save_path is just a filename without a folder
+            os.makedirs(dir_name, exist_ok=True)
+
+        # Save the JSON file
+        with open(info_save_path + '.txt', "w") as f:
+            json.dump(table_info, f, indent=4, default=make_serializable)
+
+    return injected_exposures # , sort_visit_calexp_dataset
