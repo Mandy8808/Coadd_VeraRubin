@@ -14,6 +14,7 @@ from visit.visit import Visit, combine_visits_selected
 from sky.sky import tract_patch
 from plot.visit_plot import filt_plot
 
+###################################################################################################
 def custom_coadd_filter(loc_data, bands='ugrizy', sky_coordinates=True, repository="dp1",
                         collections="LSSTComCam/DP1", butler=None,
                         type_coadd='deep_coadd',

@@ -1,6 +1,7 @@
 # vera rubin v1.0
 # tools.tools.py
 
+###################################################################################################
 def progressbar(current_value, total_value, bar_length=20, progress_char='#'): 
     """
     Display a progress bar in the console.

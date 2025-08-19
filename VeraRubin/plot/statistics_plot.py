@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from visit.visit import Visit
 from sky.sky import tract_patch
 
+###################################################################################################
 class StatisticsPlots:
     """
     Statistics and plotting utilities to be used with ExpButler.
@@ -26,7 +27,7 @@ class StatisticsPlots:
     """
 
     # Class attribute
-    ###################################################################################################
+    ##################
     def __init__(self, butler):
         self.butler = butler
 

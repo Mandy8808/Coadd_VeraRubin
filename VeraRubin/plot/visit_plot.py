@@ -9,7 +9,7 @@ import lsst.afw.display as afwDisplay
 from astropy.time import Time
 afwDisplay.setDefaultBackend('matplotlib')
 
-#######################################################
+###################################################################################################
 def mjds_to_dates(mjd_list):
     """
     Convert a list of MJDs (Modified Julian Dates) to UTC calendar dates.
@@ -18,7 +18,6 @@ def mjds_to_dates(mjd_list):
     times = Time(mjd_list, format='mjd', scale='tai')
     return [t.to_datetime().date() for t in times]
 
-#######################################################
 def filt_plot(df_metrics, visits_selected, filt_cut_select, incr=1000,
               xysc=('id_plot', 'psfSigma_mean', 'psfSigma_std', 'airmass'),
               cmap='viridis', alpha=0.2, ec='red', linewidths=1.5, save=False):

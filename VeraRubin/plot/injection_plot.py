@@ -11,8 +11,7 @@ from astropy.wcs import WCS
 
 afwDisplay.setDefaultBackend('matplotlib')
 
-
-#######################################################
+###################################################################################################
 def skywcs_to_astropy(lsst_wcs):
     """Convert LSST SkyWcs to Astropy WCS."""
     md = lsst_wcs.getFitsMetadata()  # returns PropertyList with FITS WCS keywords

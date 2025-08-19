@@ -9,7 +9,7 @@ from lsst.daf.butler import Butler  #  modules for data access via the Butler
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from plot.statistics_plot import StatisticsPlots
 
-
+###################################################################################################
 class ExpButler:
     """ 
     Class to manage data access using the LSST Butler.
@@ -21,7 +21,7 @@ class ExpButler:
     """
 
     # Class attribute
-    ###################################################################################################
+    #######################
     def __init__(self, repository="dp1", collections="LSSTComCam/DP1", info=False, **kwargs):
         """
         Parameters

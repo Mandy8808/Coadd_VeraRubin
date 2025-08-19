@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from sky.sky import patch_center
 from visit.visit import Visit
 
+###################################################################################################
 def make_serializable(obj):
     if isinstance(obj, (np.floating, np.float32, np.float64)):
         return float(obj)

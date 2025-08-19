@@ -1,12 +1,17 @@
 # vera rubin v1.0
 # coadd.custom_inject_coadd.py
 
-import os
+import sys, os
 import numpy as np
 
 from lsst.afw.image import ExposureF, MaskedImageF
 from lsst.afw.math import warpExposure, WarpingControl
 
+# Add the project root to the Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from tools.tools import progressbar
+
+###################################################################################################
 def load_exposures(paths_or_exposures):
     """
     Load a list of exposures from file paths or use given ExposureF objects.
@@ -59,33 +64,45 @@ def coadd_exposures_pipeline(exposures, ref_exp=None, warping_kernel="lanczos3",
     # Initialize coadd MaskedImage
     dims = ref_exp.getMaskedImage().getDimensions()  # Get dimensions of reference exposure
     coadd_mi = MaskedImageF(dims)  # Create an empty MaskedImage to store the final coadd
-    coadd_weight = np.zeros((dims.getY(), dims.getX()), dtype=np.float32)  # weight mapm, array to accumulate weights (inverse variance)
-
+    
     # Initialize warping control parameters
     control = WarpingControl(warpingKernelName=warping_kernel)
-
-    for exp in exposures:  # Warp each exposure to the reference WCS
-        warped_exp = ExposureF(dims, ref_exp.getWcs())  # Making a empty ExposureF
-        warpExposure(warped_exp, exp, control)  # Modify directly the warped_exp 
+    
+    # Get direct references to the coadd image and weight arrays
+    coadd_array = coadd_mi.getImage().getArray()
+    coadd_weight = np.zeros((dims.getY(), dims.getX()), dtype=np.float32)
+    
+    progressbar(0, len(exposures), bar_length=20, progress_char='#')
+    for ind, exp in enumerate(exposures, start=1):  # Warp each exposure to the reference WCS
+        # Making a empty ExposureF with the same dimensions and WCS as the reference
+        warped_exp = ExposureF(dims, ref_exp.getWcs())
+        warpExposure(warped_exp, exp, control)  # Warp the current exposure to match the reference WCS
+        
         warped_mi = warped_exp.getMaskedImage()  # Get the MaskedImage of the warped exposure
-
-        # Extract arrays of image, mask, and variance
+        
+        # Extract image, variance, and mask arrays from the MaskedImage
         img = warped_mi.getImage().getArray()
         var = warped_mi.getVariance().getArray()
         mask = warped_mi.getMask().getArray()
 
-        # Compute weight: inverse variance, ignore masked pixels
-        # Create weights array: inverse variance, ignoring masked pixels or zero variance
-        w = np.zeros_like(var)
-        valid = (var > 0) & (mask == 0)
+        # Identify valid pixels: positive variance, unmasked, and not NaN
+        valid = (var > 0) & (mask == 0) & (~np.isnan(img))
+        
+        # Initialize weight array (inverse variance), zero for invalid pixels
+        w = np.zeros_like(var, dtype=np.float32)
         w[valid] = 1.0 / var[valid]
 
-        coadd_mi.getImage().getArray()[:, :] += img * w  # Accumulate weighted sum of pixels
-        coadd_weight[:, :] += w  # Accumulate total weight
+        # Replace NaN pixels in the image with zero to avoid propagating NaN
+        img_safe = np.where(valid, img, np.nan)  #0.0
+        
+        coadd_array += img_safe * w  # Accumulate weighted sum of pixel values
+        coadd_weight += w  # Accumulate total weight
 
+        progressbar(ind, len(exposures), bar_length=20, progress_char='#')
+        
     # Normalize coadd by dividing by total weight (weighted mean)
     coadd_weight_safe = np.where(coadd_weight == 0, 1.0, coadd_weight)  # avoid division by zero
-    coadd_mi.getImage().getArray()[:, :] /= coadd_weight_safe
+    coadd_mi.getImage().getArray()[:, :] /= 1 #coadd_weight_safe
 
     # Update variance of coadd: inverse of total weight
     coadd_mi.getVariance().getArray()[:, :] = 1.0 / coadd_weight_safe
@@ -102,11 +119,11 @@ def coadd_exposures_pipeline(exposures, ref_exp=None, warping_kernel="lanczos3",
 
     return coadd_exp
 
+
+
 # ---------------------------
 # Example usage
 # ---------------------------
 # exposures_list = ["visit1.fits", "visit2.fits", exposure_obj3]
 # exposures = load_exposures(exposures_list)
 # coadded_exp = coadd_exposures_wcs(exposures, save_path="./coadds", coadd_name="band_r_coadd.fits")
-
-enumerate()
