@@ -311,7 +311,7 @@ def load_custom_coadd_from_file(info_txt_path):
     with open(info_txt_path, "r") as f:
         info = json.load(f)
 
-    butler =  ExpButler(repository=info['repo_path'], collections=info['collection'])._create_butler()
+    butler = ExpButler(repository=info['repo_path'], collections=info['collection'])._create_butler()
 
     results = {}
     for band in info['bands']:

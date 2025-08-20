@@ -103,7 +103,7 @@ def coadd_exposures_pipeline(exposures, ref_exp=None, warping_kernel="lanczos3",
         
     # Normalize coadd by dividing by total weight (weighted mean)
     coadd_weight_safe = np.where(coadd_weight == 0, 1.0, coadd_weight)  # avoid division by zero
-    coadd_mi.getImage().getArray()[:, :] /= 1 #coadd_weight_safe
+    coadd_mi.getImage().getArray()[:, :] /= coadd_weight_safe
 
     # Update variance of coadd: inverse of total weight
     coadd_mi.getVariance().getArray()[:, :] = 1.0 / coadd_weight_safe
