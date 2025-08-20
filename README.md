@@ -1,3 +1,6 @@
+<p align="center" width="160%">
+    <img width="80%" src="galleries/encabezado.png">
+</p>
 
 <p float="left">
 <a href = "LICENSE.txt"> <img src="https://img.shields.io/badge/GNU GP license-green" alt="alt text"></a>
@@ -8,10 +11,36 @@
 
 # Image Quality Characterization
 
-### The goal of this project is to develop diagnostic tools in order to validate the upcoming LSST observations for strong lensing source detection.
+<img align="right" width="25%" src="galleries/image.png">
 
+The goal of this project is to develop diagnostic tools in order to validate the upcoming [LSST](https://www.lsst.org) observations for strong lensing source detection.
+
+<hr style="border:.2px solid gray">
+
+> [!IMPORTANT]
+In order for the code to work correctly, the following packages are required:
+
+> Main codec
+- [LSST](https://pipelines.lsst.io/#)
+- [NumPy](https://numpy.org)
+- [Matplotlib](https://matplotlib.org)
+
+> [!NOTE]
+The published materials include:
+
+> [Main module](/VeraRubin/)
+
+> [Illustrative examples](/examples/)
+
+> [Illustrative stamp image](/stamp/)
+
+If our code contributes to a project that leads to a publication, please acknowledge our work by citing it.
+
+
+## Details
 
 This by identifying metrics that allow us to define a function to estimate the probability of SL sources detection. The function should be in terms of deepness (number of coadded images/exposure time), location, band, PSF size, among others. 
+
 
 We started exploring the PSF size and ellipticity. The current default method for PSF construction within the LSST pipeline uses a modified version of [PSFEx](https://psfex.readthedocs.io/en/latest/). The algorithm for point source selection uses k-means clustering classification instead of a size-magnitude region. 
 
@@ -26,4 +55,7 @@ Different ways to extract the PSF, residual distribution, comparison between mod
 For a given sky position (RA, DEC), select the best (user defined) visits and create a custom coadd. The best visits can be chosen according PSF size mean and standard deviation, airmass, seeing, wind velocity.
 
 <hr style="border:.2px solid gray">
+
+## Contact
+You can contact via email: gonzalez.alma(at)ugto.mx> / arestrada(at)fisica.uaz.edu.mx / arestrada(at)fisica.ugto.mx
 
