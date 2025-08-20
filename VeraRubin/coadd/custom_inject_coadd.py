@@ -83,17 +83,18 @@ def coadd_exposures_pipeline(exposures, ref_exp=None, warping_kernel="lanczos3",
         # Extract image, variance, and mask arrays from the MaskedImage
         img = warped_mi.getImage().getArray()
         var = warped_mi.getVariance().getArray()
-        mask = warped_mi.getMask().getArray()
+        # mask = warped_mi.getMask().getArray()
 
         # Identify valid pixels: positive variance, unmasked, and not NaN
-        valid = (var > 0) & (mask == 0) & (~np.isnan(img))
+        # valid = (var > 0) & (mask == 0) & (~np.isnan(img))
+        valid = (var > 0) & (~np.isnan(img))
         
         # Initialize weight array (inverse variance), zero for invalid pixels
         w = np.zeros_like(var, dtype=np.float32)
         w[valid] = 1.0 / var[valid]
 
         # Replace NaN pixels in the image with zero to avoid propagating NaN
-        img_safe = np.where(valid, img, np.nan)  #0.0
+        img_safe = np.where(valid, img, 0.0)
         
         coadd_array += img_safe * w  # Accumulate weighted sum of pixel values
         coadd_weight += w  # Accumulate total weight
