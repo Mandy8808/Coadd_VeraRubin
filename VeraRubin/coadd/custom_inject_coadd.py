@@ -121,10 +121,47 @@ def coadd_exposures_pipeline(exposures, ref_exp=None, warping_kernel="lanczos3",
     return coadd_exp
 
 
+def leave_one_out_residual(coadd_exp, exp, warping_kernel="lanczos3"):
+    """
+    Compare an individual exposure against a coadd by warping it to the coadd's WCS.
 
-# ---------------------------
-# Example usage
-# ---------------------------
-# exposures_list = ["visit1.fits", "visit2.fits", exposure_obj3]
-# exposures = load_exposures(exposures_list)
-# coadded_exp = coadd_exposures_wcs(exposures, save_path="./coadds", coadd_name="band_r_coadd.fits")
+    Parameters
+    ----------
+    coadd_exp : ExposureF
+        The final coadd exposure (already built).
+    exp : ExposureF
+        An individual exposure to compare against the coadd.
+    warping_kernel : str
+        Warping kernel for resampling.
+
+    Returns
+    -------
+    warped_exp : ExposureF
+        The exposure warped to the coadd's WCS.
+    residual : np.ndarray
+        Difference image = coadd - warped exposure.
+    """
+
+    dims = coadd_exp.getMaskedImage().getDimensions()
+    ref_wcs = coadd_exp.getWcs()
+
+    # Warp individual exposure to coadd WCS
+    warped_exp = ExposureF(dims, ref_wcs)
+    warpExposure(warped_exp, exp, WarpingControl(warpingKernelName=warping_kernel))
+
+    # Image arrays
+    coadd_arr = coadd_exp.getMaskedImage().getImage().getArray()
+    warped_arr = warped_exp.getMaskedImage().getImage().getArray()
+
+    # Compute raw residual: coadd - warped exposure
+    residual = coadd_arr - warped_arr
+
+    # Expected variance per pixel: Var(resid) = 1/sum_weights_coadd + 1/weight_exp
+    coadd_var = coadd_exp.getVariance().getArray()
+    exp_var = exp.getVariance().getArray()
+    expected_var = coadd_var + exp_var
+    expected_std = np.sqrt(expected_var)
+
+    # Normalized residual
+    residual_norm = residual / expected_std
+    return warped_exp, residual, residual_norm
