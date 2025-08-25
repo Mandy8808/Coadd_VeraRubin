@@ -213,6 +213,9 @@ def apply_correction_from_exposureF(
     - Rotation is performed around the image center.
     - When updating the WCS, both the reference pixel (CRPIX) and the linear 
       transformation (CD/PC matrix) are rotated consistently with the image data.
+
+    see: 
+    https://github.com/rubin-dp0/tutorial-notebooks/blob/main/DP02_14_Injecting_Synthetic_Sources.ipynb
     """
     import lsst.geom as geom
     import lsst.afw.math as afwMath
@@ -434,7 +437,7 @@ def apply_correction_to_stamp(
     try:
         # Load the original data and header
         with fits.open(stamp_file) as hdul:
-            data = hdul[0].data  # Give the pixels of the first extension
+            data = hdul[0].data.astype(np.float32, copy=False)  # Give the pixels of the first extension
             hdr = hdul[0].header.copy()  # Copy its metadata (header)
             # Note: The header may contain WCS (World Coordinate System) keywords such as:
             # NAXIS1, NAXIS2: size of the image in pixels along X and Y axes.
