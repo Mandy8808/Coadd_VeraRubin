@@ -10,6 +10,7 @@ import time
 import numpy as np
 import astropy.units as u
 
+
 from lsst.source.injection import VisitInjectConfig, VisitInjectTask, generate_injection_catalog
 from astropy.coordinates import SkyCoord
 from astropy.table import Table, vstack
@@ -174,6 +175,118 @@ def create_crowded_injection_catalog(
         "stamp": [src['stamp'] for src in accepted]
     })
 
+def apply_correction_from_exposureF(
+        data, hdr, rotation_angle,
+        warping_kernel='lanczos4',
+        update_wcs=True
+    ):
+    """
+    Rotate an astronomical image (2D numpy array) using LSST's ExposureF 
+    representation and optionally update its WCS information in the FITS header.
+
+    Parameters
+    ----------
+    data : numpy.ndarray
+        2D image data (e.g. from a FITS file).
+    hdr : astropy.io.fits.Header
+        FITS header associated with the image. Must contain standard WCS keywords 
+        (CRPIX, CRVAL, CD or PC matrix).
+    rotation_angle : float
+        Rotation angle in degrees (counter-clockwise). The value is normalized to [0, 360).
+    warping_kernel : str, optional
+        Resampling kernel used by the LSST Warper (default: 'lanczos4').
+    update_wcs : bool, optional
+        If True, the FITS header WCS will be rotated consistently with the image 
+        transformation. If False, the original header is returned unchanged.
+
+    Returns
+    -------
+    rotated_data : numpy.ndarray
+        The rotated image data.
+    hdr_new : astropy.io.fits.Header
+        A new FITS header with updated WCS if `update_wcs=True`, otherwise a copy 
+        of the input header.
+
+    Notes
+    -----
+    - The function relies on LSST's `ImageF`, `MaskedImageF`, `ExposureF`, and `makeSkyWcs`.
+    - Rotation is performed around the image center.
+    - When updating the WCS, both the reference pixel (CRPIX) and the linear 
+      transformation (CD/PC matrix) are rotated consistently with the image data.
+    """
+    import lsst.geom as geom
+    import lsst.afw.math as afwMath
+    import lsst.afw.geom as afwGeom
+
+    from lsst.afw.image import ExposureF, ImageF, MaskedImageF
+    from lsst.afw.geom import makeSkyWcs
+    from lsst.geom import Point2D, SpherePoint
+
+
+    # Convert numpy array into an LSST ExposureF
+    image = ImageF(data, deep=False)
+    masked = MaskedImageF(image)
+    exposure = ExposureF(masked)
+
+    # Build LSST SkyWcs from FITS header keywords
+    crpix = Point2D(hdr["CRPIX1"], hdr["CRPIX2"])
+    crval = SpherePoint(hdr["CRVAL1"] * geom.degrees, hdr["CRVAL2"] * geom.degrees)
+    cd_matrix = np.array([[hdr["CD1_1"], hdr["CD1_2"]],
+                          [hdr["CD2_1"], hdr["CD2_2"]]])
+        
+    skyWcs = makeSkyWcs(crpix, crval, cd_matrix)
+    exposure.setWcs(skyWcs)
+
+    # Normalize rotation angle
+    rotation_angle = rotation_angle % 360
+
+    # Warp the exposure with LSST warper
+    wcs = exposure.getWcs()
+    warper = afwMath.Warper(warping_kernel)
+    affine_rot_transform = geom.AffineTransform.makeRotation(rotation_angle * geom.degrees)
+    transform_p2top2 = afwGeom.makeTransform(affine_rot_transform)
+    rotated_wcs = afwGeom.makeModifiedWcs(transform_p2top2, wcs, False)
+
+    rotated_exp = warper.warpExposure(rotated_wcs, exposure)
+    rotated_data = rotated_exp.getMaskedImage().getImage().getArray()
+
+    # Start with a copy of the original header
+    hdr_new = hdr.copy()
+
+    # Update FITS WCS keywords if requested
+    if update_wcs and 'CTYPE1' in hdr:
+        from astropy.wcs import WCS
+        w = WCS(hdr)
+
+        # Original and rotated image dimensions
+        ny, nx = data.shape
+        ny2, nx2 = rotated_data.shape
+
+        # Image centers (FITS convention: pixel (1,1) is upper left)
+        cx, cy = (nx + 1) / 2.0, (ny + 1) / 2.0
+        cx2, cy2 = (nx2 + 1) / 2.0, (ny2 + 1) / 2.0
+
+        # Build 2x2 rotation matrix (counter-clockwise)
+        theta = np.deg2rad(rotation_angle)
+        R = np.array([[np.cos(theta), -np.sin(theta)],
+                      [np.sin(theta),  np.cos(theta)]])
+
+        # Adjust CRPIX (reference pixel) for the new center
+        v = np.array([w.wcs.crpix[0] - cx, w.wcs.crpix[1] - cy])
+        v_rot = R @ v
+        w.wcs.crpix = [v_rot[0] + cx2, v_rot[1] + cy2]
+
+        # Rotate linear WCS transformation (CD or PC matrix)
+        if w.wcs.has_cd():
+            w.wcs.cd = R @ w.wcs.cd
+        else:
+            w.wcs.pc = R @ w.wcs.pc
+
+        # Create updated header and merge with original keywords
+        hdr_new = w.to_header()
+        hdr_new.update(hdr, useblanks=False, update=True)
+
+    return rotated_data, hdr_new
 
 def apply_correction_from_data(data,
         hdr,
@@ -277,8 +390,17 @@ def apply_correction_from_data(data,
                 
     return rotated_data, hdr_new
 
-def apply_correction_to_stamp(stamp_file, rotation_angle, output_path=None,
-                              keep_size=False, interp_order=3, update_wcs=True, c=1):
+def apply_correction_to_stamp(
+        stamp_file,
+        rotation_angle,
+        output_path=None,
+        keep_size=False,
+        interp_order=3,
+        update_wcs=True,
+        c=1,
+        from_data=False,
+        warping_kernel='lanczos4'
+    ):
     """
     Rotate/Shift a FITS (Flexible Image Transport System) stamp image by a given angle (anticlockwise), optionally updating the WCS.
 
@@ -296,6 +418,10 @@ def apply_correction_to_stamp(stamp_file, rotation_angle, output_path=None,
         Interpolation order for rotation (0=nearest, 1=linear, 3=cubic).
     update_wcs : bool
         If True, rotate and update the WCS information in the header.
+    from_data : bool
+        if True used the function apply_correction_from_data else apply_correction_from_exposureF
+    warping_kernel : str
+        Interpolation kernel for warping. Options: "lanczos3", "bilinear", etc.
 
     Returns:
     --------
@@ -325,11 +451,17 @@ def apply_correction_to_stamp(stamp_file, rotation_angle, output_path=None,
             #   RA  = CRVAL1 + (x - CRPIX1) * CDELT1 (with projection applied by CTYPE1)
             #   Dec = CRVAL2 + (y - CRPIX2) * CDELT2 (with projection applied by CTYPE2)
             # This allows transforming pixel positions to accurate sky coordinates.
-        
-        rotated_data, hdr_new = apply_correction_from_data(
-            data, hdr, rotation_angle,
-            keep_size=keep_size, interp_order=interp_order, update_wcs=update_wcs, c=c
-        )
+        if from_data:
+            rotated_data, hdr_new = apply_correction_from_data(
+                data, hdr, rotation_angle,
+                keep_size=keep_size, interp_order=interp_order, update_wcs=update_wcs, c=c
+            )
+        else:
+            rotated_data, hdr_new = apply_correction_from_exposureF(
+                data, hdr, rotation_angle,
+                warping_kernel=warping_kernel,
+                update_wcs=update_wcs
+            )
 
         # Create new HDU with rotated data and header
         hdu = fits.PrimaryHDU(data=rotated_data, header=fits.Header(hdr_new)) # Dumps the modified WCS back to the header. Thus the FITS you are going to write will already have the rotated WCS.
@@ -464,10 +596,12 @@ def main_inject_stamp(
         num_select=None, 
         min_sep=0.0005,
         separation_spherical=True,
+        from_data=False,
         keep_size=False,
         interp_order=3,
         update_wcs=True,
         c=1,
+        warping_kernel='lanczos4',
         info_save_path=None,
         visit_name="visit_image",
         rot_name_save="stamp_rotated",
@@ -509,7 +643,9 @@ def main_inject_stamp(
         Minimum separation between injected sources [deg]. Default = 0.0005.
     separation_spherical : bool, optional
         If True, use spherical separation for spacing. Otherwise, Euclidean.
-    keep_size, interp_order, update_wcs, c : passed to `apply_correction_to_stamp`
+    from_data : bool
+        if True used the function `apply_correction_from_data` else `apply_correction_from_exposureF`
+    keep_size, interp_order, update_wcs, c, warping_kernel : passed to `apply_correction_to_stamp`
         Options for stamp rotation and resampling.
     info_save_path : str, optional
         Save address for data: {}, Default = None
@@ -631,7 +767,9 @@ def main_inject_stamp(
                 keep_size=keep_size,
                 interp_order=interp_order,
                 update_wcs=update_wcs,
-                c=c
+                c=c,
+                from_data=from_data,
+                warping_kernel=warping_kernel
             )
             for j, stamp_file in enumerate(stamp_paths)
         ]  # [rotate_stamp1_path, rotate_stamp2_path, ...]

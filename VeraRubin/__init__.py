@@ -24,7 +24,7 @@ from visit.visit import Visit, combine_visits_selected
 
 # Injection
 from source_injection.injection import make_serializable, measure_quality, create_crowded_injection_catalog, apply_correction_from_data
-from source_injection.injection import apply_correction_to_stamp, inject_stamp, main_inject_stamp, visit_dataset
+from source_injection.injection import apply_correction_to_stamp, inject_stamp, main_inject_stamp, visit_dataset, apply_correction_from_exposureF
 
 # Tools
 from tools.tools import progressbar
@@ -46,7 +46,7 @@ __all__ = [
     'Visit', 'combine_visits_selected',
     # Injection
     'make_serializable', 'measure_quality', 'create_crowded_injection_catalog', 'apply_correction_from_data',
-    'apply_correction_to_stamp', 'inject_stamp', 'main_inject_stamp', 'visit_dataset',
+    'apply_correction_to_stamp', 'inject_stamp', 'main_inject_stamp', 'visit_dataset', 'apply_correction_from_exposureF',
     # Tools
     'progressbar'
 ]
