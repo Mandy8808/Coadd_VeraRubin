@@ -178,6 +178,7 @@ def create_crowded_injection_catalog(
 def apply_correction_from_exposureF(
         data, hdr, rotation_angle,
         warping_kernel='lanczos4',
+        keep_size=False,
         update_wcs=True
     ):
     """
@@ -195,6 +196,8 @@ def apply_correction_from_exposureF(
         Rotation angle in degrees (counter-clockwise). The value is normalized to [0, 360).
     warping_kernel : str, optional
         Resampling kernel used by the LSST Warper (default: 'lanczos4').
+    keep_size : bool, optional
+        If True, output image keeps same shape as input (may crop edges). Default False.
     update_wcs : bool, optional
         If True, the FITS header WCS will be rotated consistently with the image 
         transformation. If False, the original header is returned unchanged.
@@ -216,6 +219,8 @@ def apply_correction_from_exposureF(
 
     see: 
     https://github.com/rubin-dp0/tutorial-notebooks/blob/main/DP02_14_Injecting_Synthetic_Sources.ipynb
+    https://community.lsst.org/t/rotating-dp0-2-exposures-with-wcs/10085/4
+    https://github.com/lsst/atmospec/blob/1e7d6e8e5655cc13d71b21ba866001e6d49ee04e/python/lsst/atmospec/utils.py#L259-L301
     """
     import lsst.geom as geom
     import lsst.afw.math as afwMath
@@ -224,8 +229,7 @@ def apply_correction_from_exposureF(
     from lsst.afw.image import ExposureF, ImageF, MaskedImageF
     from lsst.afw.geom import makeSkyWcs
     from lsst.geom import Point2D, SpherePoint
-
-
+    
     # Convert numpy array into an LSST ExposureF
     image = ImageF(data, deep=False)
     masked = MaskedImageF(image)
@@ -250,8 +254,11 @@ def apply_correction_from_exposureF(
     transform_p2top2 = afwGeom.makeTransform(affine_rot_transform)
     rotated_wcs = afwGeom.makeModifiedWcs(transform_p2top2, wcs, False)
 
-    rotated_exp = warper.warpExposure(rotated_wcs, exposure)
+    # Preserve original bounding box or expand and fill invalid pixels with 0.0
+    # http://doxygen.lsst.codes/stack/doxygen/xlink_v29.0.1_2025_04_17_04.49.14/classlsst_1_1afw_1_1math_1_1__warper_1_1_warper.html#a24012d6302090acffb399cb771f53881
+    rotated_exp = warper.warpExposure(rotated_wcs, exposure, destBBox= exposure.getBBox() if keep_size else None)
     rotated_data = rotated_exp.getMaskedImage().getImage().getArray()
+    rotated_data = np.nan_to_num(rotated_data, nan=0.0)
 
     # Start with a copy of the original header
     hdr_new = hdr.copy()
@@ -289,6 +296,12 @@ def apply_correction_from_exposureF(
         hdr_new = w.to_header()
         hdr_new.update(hdr, useblanks=False, update=True)
 
+    # If expanded, update NAXIS keywords
+    if not keep_size:
+        ny2, nx2 = rotated_data.shape
+        hdr_new['NAXIS1'] = nx2
+        hdr_new['NAXIS2'] = ny2
+        
     return rotated_data, hdr_new
 
 def apply_correction_from_data(data,
@@ -463,6 +476,7 @@ def apply_correction_to_stamp(
             rotated_data, hdr_new = apply_correction_from_exposureF(
                 data, hdr, rotation_angle,
                 warping_kernel=warping_kernel,
+                keep_size=keep_size,
                 update_wcs=update_wcs
             )
 
