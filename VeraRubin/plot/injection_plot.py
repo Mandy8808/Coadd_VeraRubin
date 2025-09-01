@@ -179,8 +179,8 @@ def injection_steps(before, after, points, diference=True,
     plt.close(fig)
     return None
 
-def pixel_intensity(image_array, y_positions_pixel, image_ref=False,
-                    save_path=None, colormap='tab10'):
+def pixel_intensity(image_array_list, y_positions_pixel, image_ref=False,
+                    save_path=None, colormap='tab10', ind=0):
     """
     Plot the pixel intensity along the X-axis for given Y-pixel positions in an image.
 
@@ -196,6 +196,8 @@ def pixel_intensity(image_array, y_positions_pixel, image_ref=False,
         If provided, the figure will be saved at this path instead of being displayed.
     colormap : str
         Name of the matplotlib colormap to assign distinct colors to each curve.
+    ind : int, optional
+        Index used as referential imagen from image_array_list
     """
     from matplotlib import cm
 
@@ -215,8 +217,10 @@ def pixel_intensity(image_array, y_positions_pixel, image_ref=False,
     
     # Colormap
     cmap = cm.get_cmap(colormap, len(y_positions_pixel))
+    lines = ['-', ':', '.-','--']
     colors = []
 
+    
     # Loop over each subplot axis
     axes_intensity = axes[1:] if image_ref else axes
     colors = []
@@ -225,7 +229,9 @@ def pixel_intensity(image_array, y_positions_pixel, image_ref=False,
 
         # Plot the pixel intensity along the X-axis for the given Y position
         color = cmap(i)
-        ax.plot(image_array[y_pixel, :], label=rf'Y-Pixel: {y_pixel}', color=color)  # line = 
+        for j, image_array in enumerate(image_array_list):
+            line = lines[j]
+            ax.plot(image_array[y_pixel, :], label=rf'Y-Pixel: {y_pixel}', color=color, ls=line)  # line = 
         colors.append(color)  # Save color for later use # old line[0].get_color()
 
         # Add legend without frame
@@ -236,8 +242,8 @@ def pixel_intensity(image_array, y_positions_pixel, image_ref=False,
         ax.set_ylabel(r'Pixel Intensity Profile')
     
     if image_ref:
-        vmin, vmax = np.percentile(image_array, 1), np.percentile(image_array, 99)
-        axes[0].imshow(image_array, origin='lower', cmap="gray", vmin=vmin, vmax=vmax)
+        vmin, vmax = np.percentile(image_array_list[ind], 1), np.percentile(image_array_list[ind], 99)
+        axes[0].imshow(image_array_list[ind], origin='lower', cmap="gray", vmin=vmin, vmax=vmax)
 
         # draw the horizontal lines corresponding to the Y-pixel positions
         for (y_pixel, color) in zip(y_positions_pixel, colors):
@@ -252,12 +258,13 @@ def pixel_intensity(image_array, y_positions_pixel, image_ref=False,
     # Save or show the figure depending on argument
     if save_path is not None:
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
-        print(f"[INFO] Figure saved to {save_path}")
+        print(f"[INFO] Figure saved to {save_path}")        
     else:
         plt.show()
-
+    
     # Free memory after plotting
     plt.close(fig)
+        
     return None
 
 def plot_exposures_and_coadd(exposures,

@@ -227,21 +227,19 @@ def apply_correction_from_exposureF(
     import lsst.afw.geom as afwGeom
 
     from lsst.afw.image import ExposureF, ImageF, MaskedImageF
-    from lsst.afw.geom import makeSkyWcs
-    from lsst.geom import Point2D, SpherePoint
     
     # Convert numpy array into an LSST ExposureF
-    image = ImageF(data, deep=False)
+    image = ImageF(data.astype(np.float32, order="C"), deep=False)
     masked = MaskedImageF(image)
     exposure = ExposureF(masked)
 
     # Build LSST SkyWcs from FITS header keywords
-    crpix = Point2D(hdr["CRPIX1"], hdr["CRPIX2"])
-    crval = SpherePoint(hdr["CRVAL1"] * geom.degrees, hdr["CRVAL2"] * geom.degrees)
+    crpix = geom.Point2D(hdr["CRPIX1"], hdr["CRPIX2"])
+    crval = geom.SpherePoint(hdr["CRVAL1"] * geom.degrees, hdr["CRVAL2"] * geom.degrees)
     cd_matrix = np.array([[hdr["CD1_1"], hdr["CD1_2"]],
                           [hdr["CD2_1"], hdr["CD2_2"]]])
         
-    skyWcs = makeSkyWcs(crpix, crval, cd_matrix)
+    skyWcs = afwGeom.makeSkyWcs(crpix, crval, cd_matrix)
     exposure.setWcs(skyWcs)
 
     # Normalize rotation angle
@@ -256,7 +254,10 @@ def apply_correction_from_exposureF(
 
     # Preserve original bounding box or expand and fill invalid pixels with 0.0
     # http://doxygen.lsst.codes/stack/doxygen/xlink_v29.0.1_2025_04_17_04.49.14/classlsst_1_1afw_1_1math_1_1__warper_1_1_warper.html#a24012d6302090acffb399cb771f53881
-    rotated_exp = warper.warpExposure(rotated_wcs, exposure, destBBox= exposure.getBBox() if keep_size else None)
+    
+    #min_point = geom.Point2I(0, 0)
+    #extent = geom.Extent2I(keep_size[0], keep_size[1])
+    rotated_exp = warper.warpExposure(rotated_wcs, exposure, destBBox=None)
     rotated_data = rotated_exp.getMaskedImage().getImage().getArray()
     rotated_data = np.nan_to_num(rotated_data, nan=0.0)
 
@@ -264,45 +265,25 @@ def apply_correction_from_exposureF(
     hdr_new = hdr.copy()
 
     # Update FITS WCS keywords if requested
-    if update_wcs and 'CTYPE1' in hdr:
-        from astropy.wcs import WCS
-        w = WCS(hdr)
+    if update_wcs:
+        wcs_rotated = rotated_exp.getWcs()
 
-        # Original and rotated image dimensions
-        ny, nx = data.shape
-        ny2, nx2 = rotated_data.shape
+        # Ajustar el WCS al origen de píxeles (0, 0)
+        offset = geom.Extent2D(geom.Point2I(0, 0) - rotated_exp.getXY0())
+        wcs_ajust = wcs_rotated.copyAtShiftedPixelOrigin(offset)
 
-        # Image centers (FITS convention: pixel (1,1) is upper left)
-        cx, cy = (nx + 1) / 2.0, (ny + 1) / 2.0
-        cx2, cy2 = (nx2 + 1) / 2.0, (ny2 + 1) / 2.0
+        # Convertir el WCS ajustado a metadatos FITS
+        wcs_md = wcs_ajust.getFitsMetadata()
 
-        # Build 2x2 rotation matrix (counter-clockwise)
-        theta = np.deg2rad(rotation_angle)
-        R = np.array([[np.cos(theta), -np.sin(theta)],
-                      [np.sin(theta),  np.cos(theta)]])
+        # empezar copiando el header original
+        hdr_new = hdr.copy()
 
-        # Adjust CRPIX (reference pixel) for the new center
-        v = np.array([w.wcs.crpix[0] - cx, w.wcs.crpix[1] - cy])
-        v_rot = R @ v
-        w.wcs.crpix = [v_rot[0] + cx2, v_rot[1] + cy2]
+        # sobrescribir SOLO los keywords de WCS
+        for k, v in wcs_md.toDict().items():
+            hdr_new[k] = v
 
-        # Rotate linear WCS transformation (CD or PC matrix)
-        if w.wcs.has_cd():
-            w.wcs.cd = R @ w.wcs.cd
-        else:
-            w.wcs.pc = R @ w.wcs.pc
-
-        # Create updated header and merge with original keywords
-        hdr_new = w.to_header()
-        hdr_new.update(hdr, useblanks=False, update=True)
-
-    # If expanded, update NAXIS keywords
-    if not keep_size:
-        ny2, nx2 = rotated_data.shape
-        hdr_new['NAXIS1'] = nx2
-        hdr_new['NAXIS2'] = ny2
-        
     return rotated_data, hdr_new
+
 
 def apply_correction_from_data(data,
         hdr,
