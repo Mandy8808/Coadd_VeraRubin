@@ -175,8 +175,72 @@ def create_crowded_injection_catalog(
         "stamp": [src['stamp'] for src in accepted]
     })
 
-
 def apply_correction_from_exposureF(
+        data, hdr, rotation_angle,
+        warping_kernel='lanczos4',
+        keep_size=False,
+        update_wcs=True,
+        fill_value=0.0
+    ):
+    """
+    Rotate an astronomical image (2D numpy array) using LSST ExposureF 
+    and optionally update its WCS.
+
+    Parameters
+    ----------
+    ...
+    fill_value : float, optional
+        Value used to fill invalid pixels after rotation. Default 0.0.
+    """
+    import lsst.geom as geom
+    import lsst.afw.math as afwMath
+    import lsst.afw.geom as afwGeom
+    from lsst.afw.image import ExposureF, ImageF, MaskedImageF
+
+    rotation_angle = float(rotation_angle) % 360.0
+    valid_kernels = ['bilinear', 'lanczos2', 'lanczos3', 'lanczos4', 'nearest']
+    if warping_kernel not in valid_kernels:
+        raise ValueError(f"Invalid warping kernel '{warping_kernel}'. Must be one of {valid_kernels}")
+
+    image = ImageF(data.astype(np.float32, order="C"), deep=False)
+    exposure = ExposureF(MaskedImageF(image))
+
+    # Build WCS
+    crpix = geom.Point2D(hdr["CRPIX1"], hdr["CRPIX2"])
+    crval = geom.SpherePoint(hdr["CRVAL1"] * geom.degrees, hdr["CRVAL2"] * geom.degrees)
+    if "CD1_1" in hdr:
+        cd = np.array([[hdr["CD1_1"], hdr["CD1_2"]], [hdr["CD2_1"], hdr["CD2_2"]]])
+    else:
+        cd = np.array([[hdr["PC1_1"] * hdr["CDELT1"], hdr["PC1_2"] * hdr["CDELT1"]],
+                       [hdr["PC2_1"] * hdr["CDELT2"], hdr["PC2_2"] * hdr["CDELT2"]]])
+    exposure.setWcs(afwGeom.makeSkyWcs(crpix, crval, cd))
+
+    # Rotation transform
+    dims = exposure.getDimensions()
+    center = geom.Point2D(0.5 * dims.getX(), 0.5 * dims.getY())
+    R = geom.AffineTransform.makeRotation(rotation_angle * geom.degrees)
+    # Compose the transforms: T2 * R * T1
+    rot_center = geom.AffineTransform.makeTranslation(geom.Extent2D(center.getX(), center.getY())) * R * geom.AffineTransform.makeTranslation(geom.Extent2D(-center.getX(), -center.getY()))
+    transform = afwGeom.makeTransform(rot_center)
+    rotated_wcs = afwGeom.makeModifiedWcs(transform, exposure.getWcs(), False)
+
+    # Warp
+    warper = afwMath.Warper(warping_kernel)
+    bbox = exposure.getBBox() if keep_size else None
+    rotated_exp = warper.warpExposure(rotated_wcs, exposure, destBBox=bbox)
+    rotated_data = np.nan_to_num(rotated_exp.getMaskedImage().getImage().getArray(), nan=fill_value)
+
+    hdr_new = hdr.copy()
+    if update_wcs:
+        offset = geom.Extent2D(geom.Point2I(0, 0) - rotated_exp.getXY0())
+        wcs_adj = rotated_exp.getWcs().copyAtShiftedPixelOrigin(offset)
+        for k, v in wcs_adj.getFitsMetadata().toDict().items():
+            if k.startswith(('CR', 'CD', 'PC', 'CDELT', 'CTYPE', 'CUNIT')):
+                hdr_new[k] = v
+
+    return rotated_data, hdr_new
+
+def apply_correction_from_exposureF_old(
         data, hdr, rotation_angle,
         warping_kernel='lanczos4',
         keep_size=False,
@@ -278,9 +342,14 @@ def apply_correction_from_exposureF(
 
     # Warp the exposure with LSST Warper
     # Preserve original bounding box or expand and fill invalid pixels with 0.0
-    # http://doxygen.lsst.codes/stack/doxygen/xlink_v29.0.1_2025_04_17_04.49.14/classlsst_1_1afw_1_1math_1_1__warper_1_1_warper.html#a24012d6302090acffb399cb771f53881 
+    # http://doxygen.lsst.codes/stack/doxygen/xlink_v29.0.1_2025_04_17_04.49.14/classlsst_1_1afw_1_1math_1_1__warper_1_1_warper.html#a24012d6302090acffb399cb771f53881
+    if keep_size:
+        bbox = exposure.getBBox()
+    else:
+        bbox = None
+    
     warper = afwMath.Warper(warping_kernel)
-    rotated_exp = warper.warpExposure(rotated_wcs, exposure, destBBox=None)
+    rotated_exp = warper.warpExposure(rotated_wcs, exposure, destBBox=bbox)
     rotated_data = rotated_exp.getMaskedImage().getImage().getArray()
     rotated_data = np.nan_to_num(rotated_data, nan=0.0)
 
