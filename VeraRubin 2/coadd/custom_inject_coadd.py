@@ -33,7 +33,7 @@ def load_exposures(paths_or_exposures):
 def coadd_exposures_pipeline(
     exposures,
     ref_exp=None,
-    warping_kernel="lanczos3",
+    warping_kernel="lanczos4",
     save_path=None,
     coadd_name="coadd.fits",
     info=False,
@@ -125,6 +125,9 @@ def coadd_exposures_pipeline(
             c2 = exp.getWcs().pixelToSky(0.5 * dims.getX(), 0.5 * dims.getY())
             print("Offset (degree):", c1.separation(c2).asArcseconds()/3600)
 
+            # Compute relative rotation angles w.r.t first visit
+            print("Rotation angle (degree):", exp.getWcs().getRelativeRotationToWcs(ref_wcs).asDegrees())
+
         # Apply photometric scale factor if available
         try:
             ref_flux0 = ref_exp.getCalib().getFluxMag0()[0]
@@ -144,8 +147,8 @@ def coadd_exposures_pipeline(
         img_safe = np.where(valid, img, 0.0)
         
         # Accumulate weighted flux and total weight
-        #coadd_array += img_safe * w
-        coadd_array += (img_safe) # * w
+        coadd_array += img_safe * w
+        # coadd_array += (img_safe) # * w
         coadd_weight += w
         coverage_map += valid.astype(np.int32)
 
