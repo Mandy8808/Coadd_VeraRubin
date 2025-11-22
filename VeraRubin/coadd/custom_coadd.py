@@ -1,4 +1,3 @@
-
 # vera rubin v1.0
 # coadd.custom_coadd.py
 import os, sys

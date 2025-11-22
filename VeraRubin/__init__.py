@@ -2,7 +2,8 @@
 
 # Butler
 from .butler.butler import ExpButler
-
+from .butler.custom_butler import main_local_repo, setup_logger, _run, get_butler_location, create_empty_repo, instrument_register_from_remote,\
+                           register_datasetTypes, transfer_visits, skymap_register_from_remote
 # Coadd
 from .coadd.custom_coadd import custom_coadd_filter, custom_coadd_multiband, load_custom_coadd_from_file
 from .coadd.custom_inject_coadd import coadd_exposures_pipeline, coadd_exposures_pipeline, leave_one_out_residual, validate_rotation
@@ -34,6 +35,8 @@ from tools.tools import progressbar
 __all__ = [
     # ExpButler
     'ExpButler',
+    'main_local_repo', 'setup_logger', '_run', 'get_butler_location', 'create_empty_repo', 'instrument_register_from_remote',
+    'register_datasetTypes', 'transfer_visits', 'skymap_register_from_remote',
     # Coadd
     'custom_coadd_filter', 'custom_coadd_multiband', 'load_custom_coadd_from_file',
     'coadd_exposures_pipeline', 'leave_one_out_residual', 'validate_rotation',
