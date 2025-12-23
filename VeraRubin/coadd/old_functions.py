@@ -229,3 +229,200 @@ def coadd_exposures_pipeline_old(exposures, ref_exp=None, warping_kernel="lanczo
         print(f"[INFO] LSST-style coadd saved to {full_path}")
 
     return coadd_exp
+
+
+
+def select_visits(
+    butler: Butler,
+    loc: list | tuple,
+    band: str = "u",
+    instrument: str = "LSSTComCam",
+    datasetType: str = "visit_image",
+    skymap_name: str = "lsst_cells_v1",
+    # Optional advanced features
+    filter_by_patch: bool = True,        # use tract/patch to restrict visits
+    filter_by_region: bool = False,      # use visit_detector_region (if available)
+    detectors: list = None,              # allowed detectors
+    order_by_time: bool = True,          # sort visits by timestamp
+    logger: logging.Logger = None,):
+    """
+    Return DatasetRefs for images overlapping the patch.
+    https://github.com/lsst/pipe_tasks/blob/main/python/lsst/pipe/tasks/selectImages.py
+    """
+    ra_deg, dec_deg = loc
+    point_sky = lsst.geom.SpherePoint(ra_deg, dec_deg, lsst.geom.degrees)
+
+    # Load sky map
+    sky_map = butler.get("skyMap", skymap=skymap_name)
+    tract_info = sky_map.findTract(point_sky)
+    patch_info = tract_info.findPatch(point_sky)
+
+    tract_id = tract_info.getId()
+    patch_index = patch_info.getIndex()
+
+    message(logger, f"[SELECT] Tract={tract_id}, Patch={patch_index}")
+
+    # Prepare polygon vertices
+    poly = patch_info.getOuterSkyPolygon()
+    coordList = [lsst.geom.SpherePoint(v) for v in poly.getVertices()]
+
+    # Query all visits for this band + instrument
+    with butler.query() as q:
+        q = q.datasets(datasetType)
+        query_parts = [f"band='{band}'", f"instrument='{instrument}'",]
+
+        # Optional: restrict to tract
+        if filter_by_patch:
+            query_parts.append(f"tract={tract_info.getId()}")
+
+        # Optional: use detector footprint region
+        if filter_by_region:
+            query_parts.append(f"visit_detector_region.region OVERLAPS POINT({ra_deg}, {dec_deg})")
+
+        # Optional: filter detectors
+        if detectors:
+            query_parts.append(f"detector IN ({','.join(str(d) for d in detectors)})")
+        
+        q = q.where(" AND ".join(query_parts))
+        if order_by_time:
+            q = q.order_by("visit.timespan.begin")
+        visit_refs = list(q)
+
+    message(logger, f"[SELECT] Candidate visits: {len(visit_refs)}")
+
+    # Load WCS + BBox to filter images by footprint intersection
+    wcsList, bboxList, validRefs = [], [], []
+    for ref in visit_refs:
+        try:
+            exp = butler.get(datasetType, dataId=ref.dataId)
+            wcsList.append(exp.getWcs())
+            bboxList.append(exp.getBBox())
+            validRefs.append(ref)
+        except Exception as e:
+            message(logger, f"[WARN] Failed reading {ref.dataId}: {e}")
+
+    # Filter with WCS intersection
+    task = WcsSelectImagesTask()
+    indices = task.run(wcsList=wcsList, bboxList=bboxList, coordList=coordList, dataIds=validRefs,)
+    visit_refs = [validRefs[i] for i in indices]
+    message(logger, f"[SELECT] Overlapping visits: {len(visit_refs)}")
+
+    return visit_refs, tract_info, patch_info
+
+
+def group_detector_inputs(dataset_refs, butler, datasetType="visit_image"):
+    """
+    Return:
+    {id_1: {0: WarpDetectorInputs, 3: WarpDetectorInputs, ...}, id_2: {3: WarpDetectorInputs, 6: WarpDetectorInputs, ...}, ...}
+    """
+    grouped = defaultdict(dict)
+
+    for ref in dataset_refs:
+        # Load exposure for this ref
+        exp = butler.get(datasetType, dataId=ref.dataId)
+
+        # Detector ID
+        det_id = exp.getDetector().getId()
+
+        # Visit ID
+        visit_id = ref.dataId["visit"]
+
+        # Expand DataCoordinate so WarpDetectorInputs works
+        expanded_id = butler.registry.expandDataId(ref.dataId)
+
+        # Build WarpDetectorInputs
+        wdi = WarpDetectorInputs(
+            exposure_or_handle=exp,
+            data_id=expanded_id,
+            background_revert=None,
+            background_apply=None,
+            background_ratio_or_handle=None
+        )
+
+        # Store in structure
+        grouped[visit_id][det_id] = wdi
+
+    return dict(grouped)
+
+def show_all(exp):
+    """Plot image, variance, and mask using the Exposure WCS."""
+    
+    # Get arrays
+    img = exp.getImage().getArray()
+    var = exp.getVariance().getArray()
+    mask = exp.getMask().getArray()
+
+    # Convert LSST WCS -> Astropy WCS
+    awcs = WCS(exp.getWcs().getFitsMetadata().toDict())
+    fig, axs = plt.subplots(1, 3, figsize=(18, 6), subplot_kw={'projection': awcs})
+
+    p5, p95 = np.nanpercentile(img, [5, 95])
+    axs[0].imshow(img, origin='lower', cmap='gray', vmin=p5, vmax=p95)
+    axs[0].coords.grid(color='white', ls='dotted')
+    axs[0].set_title("Image")
+    
+    axs[1].imshow(var, origin='lower', cmap='magma')
+    axs[1].coords.grid(color='white', ls='dotted')
+    axs[1].set_title("Variance")
+
+    axs[2].imshow(mask != 0, origin='lower', cmap='gray')
+    axs[2].coords.grid(color='white', ls='dotted')
+    axs[2].set_title("Mask")
+
+    plt.tight_layout()
+    plt.show()
+
+
+
+from lsst.skymap import TractInfo, PatchInfo
+from lsst.daf.butler import DatasetType
+from lsst.daf.butler import CollectionType
+
+
+def outputRefs_warps(registry,
+                     first_input,  # data_id
+                     sky_info,  # makeSkyInfo
+                     skymap_name="lsst_cells_v1",
+                     dtype_name="directWarp",
+                     run_name="directWarp_run",
+                     logger=None,):
+    # check that the collection exists
+    try:
+        registry.getCollectionType(run_name)
+    except Exception:
+        message(logger, f"[INFO] Registering the collection '{run_name}'")
+        registry.registerCollection(run_name, CollectionType.RUN)
+    
+    # ensure datasetType exists
+    try:
+        dt = registry.getDatasetType(dtype_name)
+    except Exception:
+        message(logger, f"[INFO] Registering datasetType '{dtype_name}'")
+        universe = registry.dimensions
+        dims = universe.conform(
+            ("skymap", "instrument", "visit", "band", "physical_filter", "tract", "patch")
+        )
+
+        dt = DatasetType(
+            name=dtype_name,
+            dimensions=dims,
+            storageClass="ExposureF",
+            universe=universe,
+        )
+        registry.registerDatasetType(dt)
+
+    dataId = dict(
+        skymap          = skymap_name,
+        instrument      = first_input["instrument"],
+        visit           = first_input["visit"],
+        band            = first_input["band"],
+        physical_filter = first_input["physical_filter"],
+        tract           = sky_info.tractInfo.getId(),
+        patch           = sky_info.patchInfo.getSequentialIndex(),
+    )
+
+    return DatasetRef(
+        datasetType=dt,
+        dataId=dataId,
+        run="directWarp_run",
+    )

@@ -8,6 +8,7 @@ from .butler.custom_butler import main_local_repo, create_empty_repo, transfer_a
 # Coadd
 from .coadd.custom_coadd import custom_coadd_filter, custom_coadd_multiband, load_custom_coadd_from_file
 from .coadd.custom_inject_coadd import coadd_exposures_pipeline, coadd_exposures_pipeline, leave_one_out_residual, validate_rotation
+from .coadd.custom_warp import custom_warp, select_visits, runDirectWarpTask
 
 # exposure
 from exposure.exposure import load_exposures, save_exposure, normalize_exposures, exposure_to_fits_datahdr, cutout_exposure
@@ -45,6 +46,7 @@ __all__ = [
     # Coadd
     'custom_coadd_filter', 'custom_coadd_multiband', 'load_custom_coadd_from_file',
     'coadd_exposures_pipeline', 'leave_one_out_residual', 'validate_rotation',
+    'custom_warp', 'select_visits', 'runDirectWarpTask',
     # Exposure
     'load_exposures', 'save_exposure', 'normalize_exposures', 'exposure_to_fits_datahdr', 'cutout_exposure',
     # Fits

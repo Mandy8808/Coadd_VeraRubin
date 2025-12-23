@@ -52,7 +52,8 @@ class Visit():
     # ------------------------------------------------------------
     # Get images overlapping a particular sky position
     # ------------------------------------------------------------
-    def query_visit_image(self, detectors=None, timespan=None, visit_ids=None, use_patch_area=False):
+    def query_visit_image(self, detectors=None, timespan=None, visit_ids=None, use_patch_area=False,
+                          filter_by_region=True, instrument="LSSTComCam"):
         """
         Identify images overlapping a particular sky position and select one to inject sources into.
 
@@ -68,7 +69,8 @@ class Visit():
             Optional list of visit IDs to filter
         use_patch_area : bool
             If True, query uses the entire patch area (like coadd construction);
-            if False, query uses the central point (RA, Dec).
+        filter_by_region: bool
+            If True, query uses visit_detector_region.region OVERLAPS POINT to filter visits;
 
         Returns
         -------
@@ -83,13 +85,17 @@ class Visit():
         # Base query
         query_parts = [f"band='{self.band}'"]
 
+        # Instrument filter
+        query_parts.append(f"instrument='{instrument}'")
+
         # Spatial filter: by point or by patch
         if use_patch_area:
             # Get tract and patch for RA/Dec
             tract, patch = tract_patch(self.butler, self.ra_deg, self.dec_deg, sequential_index=True)
             query_parts.append(f"tract={tract}")
             query_parts.append(f"patch={patch}")
-        else:
+        
+        if filter_by_region:
             # Point query
             query_parts.append(f"visit_detector_region.region OVERLAPS POINT({self.ra_deg}, {self.dec_deg})")
 
@@ -371,7 +377,9 @@ def visit_dataset(
     collections="LSSTComCam/DP1",
     detectors=None,
     timespan=None,
-    visit_ids=None
+    visit_ids=None,
+    filter_by_region=True,
+    instrument="LSSTComCam",
 ):
     """
     Query LSST visit-level calibrated exposures (calexp) around a location.
@@ -397,6 +405,10 @@ def visit_dataset(
         Restrict query to a specific time interval.
     visit_ids : list of int, optional
         Restrict query to specific visit IDs.
+    filter_by_region : bool, optional
+        If True, use visit_detector_region to filter visits.
+    instrument : str, optional
+        Instrument name (default: "LSSTComCam").
 
     Returns
     -------
@@ -428,7 +440,9 @@ def visit_dataset(
         detectors=detectors,
         visit_ids=visit_ids,
         use_patch_area=use_patch_area,
+        filter_by_region=filter_by_region,
         timespan=timespan,
+        instrument=instrument
     )
 
     return visit_refs
