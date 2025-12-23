@@ -2,8 +2,20 @@
 # sky file
 
 import lsst.geom
+from astropy.wcs import WCS
 
 #################### SkyMap ##################################################
+def skywcs_to_astropy(lsst_wcs):
+    """Convert LSST SkyWcs to Astropy WCS."""
+    md = lsst_wcs.getFitsMetadata()  # returns PropertyList with FITS WCS keywords
+    header = {}
+    for key in md.names():
+        try:
+            header[key] = md.getScalar(key)
+        except Exception:
+            continue
+    return WCS(header)
+
 def tract_patch(butler, ra_deg, dec_deg, sequential_index=True):
     """
     From sky coordinates (RA, Dec in degrees), identify the tract and patch
@@ -32,7 +44,10 @@ def tract_patch(butler, ra_deg, dec_deg, sequential_index=True):
     """
     # with the sky coordinates, we identify the tract and patch that cover the desired region
     point_sky = lsst.geom.SpherePoint(ra_deg, dec_deg, lsst.geom.degrees)
-    skymap = butler.get("skyMap")
+    try:
+        skymap = butler.get("skyMap")
+    except:
+        skymap = butler.get("skyMap", collections=butler.registry.queryCollections())
 
     tract_info = skymap.findTract(point_sky)
     tract = tract_info.getId()

@@ -361,6 +361,78 @@ class Visit():
 
 
 ########### EXTRA FUNCTIONS ##############################################################################
+
+def visit_dataset(
+    butler,
+    band,
+    loc_data,
+    repository=None,
+    use_patch_area=False,
+    collections="LSSTComCam/DP1",
+    detectors=None,
+    timespan=None,
+    visit_ids=None
+):
+    """
+    Query LSST visit-level calibrated exposures (calexp) around a location.
+
+    Parameters
+    ----------
+    butler : lsst.daf.butler.Butler
+        Butler instance to access the LSST data repository.
+    band : str
+        Filter band (e.g., "g", "r", "i").
+    loc_data : tuple
+        Location of interest:
+        - If (ra, dec) in degrees: query visits covering this position.
+        - If (tract, patch): query visits overlapping that patch.
+    repository: str
+        Path to the LSST data repository
+    use_patch_area : bool, optional
+        If True, use the full patch area for the query. 
+        If False (default), use only the central coordinate.
+    detectors : list of int, optional
+        Restrict query to specific detectors.
+    timespan : lsst.daf.butler.Timespan, optional
+        Restrict query to a specific time interval.
+    visit_ids : list of int, optional
+        Restrict query to specific visit IDs.
+
+    Returns
+    -------
+    visit_refs : list of lsst.daf.butler.DeferredDatasetHandle
+        References to the matching visit-level exposures.
+    """
+
+    if butler:
+        # Use an existing Butler
+        visit_obj = Visit(
+            loc_data=loc_data,
+            butler=butler,
+            band=band,
+        )
+    elif repository:
+        # Use a repository path
+        visit_obj = Visit(
+            loc_data=loc_data,
+            repository=repository,
+            band=band,
+            collections=collections,
+        )
+    else:
+        print('[Error] A butler or repository path must be provided.')
+        raise ValueError("Missing 'butler' or 'repository' input")
+
+    # Query matching visit images
+    visit_refs = visit_obj.query_visit_image(
+        detectors=detectors,
+        visit_ids=visit_ids,
+        use_patch_area=use_patch_area,
+        timespan=timespan,
+    )
+
+    return visit_refs
+
 def combine_visits_selected(visits_selected_list):
     """
     Combine a list of DataFrames (each representing a band) into a single DataFrame.

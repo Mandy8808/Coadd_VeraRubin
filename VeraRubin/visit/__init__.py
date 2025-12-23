@@ -1,7 +1,7 @@
 # visit/__init__.py
 
-from .visit import Visit, combine_visits_selected
+from .visit import Visit, combine_visits_selected, visit_dataset
 
 __all__ = [
-    'Visit', 'combine_visits_selected'
+    'Visit', 'combine_visits_selected', 'visit_dataset'
 ]

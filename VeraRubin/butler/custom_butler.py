@@ -1,12 +1,17 @@
 # vera rubin v1.0
 # butler.custom_butler.py
 
+# Loading modules
 import subprocess
 import pathlib
 import logging
 import os, sys
 
-from lsst.daf.butler import Butler, DatasetType, DatasetRef
+from lsst.daf.butler import Butler, DatasetType, DatasetRef, CollectionType
+
+# Add the project root to the Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from tools.tools import setup_logger, _run
 
 # Top-level
 # ---------------------------------------------------------------------
@@ -14,14 +19,14 @@ def main_local_repo(
     LOCAL_REPO: str, 
     REMOTE_REPO: str,
     visits_datasetRef: list[DatasetRef],
-    skymap_register: bool = True,
     remote_collection: str = "LSSTComCam/DP1",
     LOGDIR: str = "/projects/BR/logs",
-    make_repo: bool = True
+    make_repo: bool = True,
+    chain_name: str = "local_main_chain"
 ) -> bool:
     """
-    Main pipeline to create local repo, register instruments/datatypes/skymap,
-    and transfer requested visits.
+    Create a local Butler repo and import visits and supporting datasets from a remote repo.
+    Important: DO NOT pre-register SkyMap; we copy it from remote after importing visits to preserve UUIDs.
 
     visits_datasetRef: list of DatasetRef objects (from the remote butler) describing each visit to transfer.
     """
@@ -62,139 +67,100 @@ def main_local_repo(
         logger.exception("Could not register instruments")
         raise
 
-    # register dataset types
-    #dataset_types = set(map(lambda x: x.datasetType, visits_datasetRef))
-    unique_dt_by_name = {}
-    for ref in visits_datasetRef:
-        dt = ref.datasetType
-        unique_dt_by_name[dt.name] = dt
-    dataset_types = list(unique_dt_by_name.values())
-    logger.info(f"Registering DatasetTypes: {[dt.name for dt in dataset_types]}")
-    try:
-        register_datasetTypes(LOCAL_REPO, dataset_types, logger=logger, check=True)
-        logger.info("DatasetType registration complete.")
-    except Exception:
-        logger.exception("Could not register DatasetTypes")
-        raise
-
-    # Optional: register skymap before transferring data
-    if skymap_register:
-        logger.info("Registering skymap from remote")
-        try:
-            skymap_register_from_remote(
-                local_repo=LOCAL_REPO,
-                remote_repo=REMOTE_REPO,
-                collections=remote_collection,
-                logger=logger
-            )
-            logger.info("Skymap registration complete.")
-        except Exception:
-            logger.exception("Could not register skymap")
-            raise
-
     # Transfer visits (iterate datasetRefs)
+    collections_str = remote_collection  # pass to CLI
     logger.info("Starting visits transfer loop")
+    remote_butler = Butler(REMOTE_REPO, collections=remote_collection)
     for ref in visits_datasetRef:
         try:
             dataId = ref.dataId
-            visits_val = dataId.get("visit")
-            # ensure visits is a list for transfer_visits
-            visits_arg = [visits_val] if isinstance(visits_val, (int, str)) else list(visits_val)
+            visit = dataId["visit"]
+            band = dataId["band"]
+            instrument=dataId["instrument"]
 
-            transfer_visits(
-                REMOTE_REPO,
-                LOCAL_REPO,
-                visits=visits_arg,
-                band=dataId["band"],
-                instrument=dataId["instrument"],
-                physical_filter=dataId.get("physical_filter"),
-                detector=dataId.get("detector"),
-                day_obs=dataId.get("day_obs"),
-                skymap=dataId.get("skymap"),
-                collections=remote_collection,
-                dataset=ref.datasetType.name,
-                logger=logger
-            )
+            logger.info(f"\n[VISIT] Processing visit {visit}")
+
+            # discover datasets
+            out_dic = discover_datasets_for_visit(REMOTE_REPO, datasetRef=ref, optional=True, logger=logger)
+            required_present = out_dic['required_present']
+            optional_present = out_dic['optional_present']
+            missing_required = out_dic['missing_required']
+
+            if missing_required:
+                logger.warning(f"[WARN] Required datasets missing for visit {visit}: {missing_required}")
+
+            # Register datasetTypes found in remote before copying (so registry knows types)
+            all_dt = list(required_present | optional_present)
+            dtypes = [
+                dt for dt in remote_butler.registry.queryDatasetTypes()
+                if dt.name in all_dt]
+            logger.info(f"Registering DatasetTypes: {[dt.name for dt in dtypes]}")
+            
+            if dtypes:
+                try:
+                    register_datasetTypes(LOCAL_REPO, dtypes, logger=logger)
+                    logger.info("DatasetType registration complete.")
+                except Exception:
+                    logger.exception("Could not register DatasetTypes")
+                    raise
+            
+            # Transfer all dataset types for this visit
+            transfer_all_visit_datasets(
+                remote_repo=REMOTE_REPO,
+                local_repo=LOCAL_REPO,
+                visit_id=visit,
+                required_present=required_present,
+                optional_present=optional_present,
+                instrument=instrument,
+                band=band,
+                collections=collections_str,
+                logger=logger,
+                )
             logger.info(f"Transfer succeeded for dataId: {dataId}")
         except Exception:
             logger.exception(f"Transfer failed for DatasetRef: {ref}")
             raise
+    
+    # After all visits copied, copy skyMap datasets (preserve UUIDs, avoid conflicts)
+    # Register skyMap DatasetType BEFORE transfer
+    remote_dt = [dt for dt in remote_butler.registry.queryDatasetTypes()
+             if dt.name == "skyMap"]
+    if remote_dt:
+        logger.info("Registering DatasetType 'skyMap' in local repo before transfer.")
+        register_datasetTypes(LOCAL_REPO, remote_dt, logger=logger)
+    else:
+        logger.warning("Remote repo does NOT contain datasetType 'skyMap'.")
+        raise
+
+    # transfer skyMap(s)
+    try:
+        logger.info("Copying skyMap(s) from remote to local (preserving UUIDs)...")
+        skymap_register_from_remote(REMOTE_REPO, LOCAL_REPO, remote_collections=remote_collection, logger=logger)
+        logger.info("SkyMap copy finished.")
+    except Exception:
+        logger.exception("SkyMap copy failed.")
+        raise
+
+    # Create a chained collection that includes skymaps and the imported runs (so butler.get finds skyMap)
+    # Determine available collections in local registry
+    local_butler = Butler(LOCAL_REPO, writeable=True)
+    local_collections = list(local_butler.registry.queryCollections())
+    # typical collections: ['skymaps', 'ingest', 'my_imported_run', ...]
+    # We'll create chain containing 'skymaps' plus everything that startswith 'LSSTComCam/runs' or similar
+    # Conservative approach: include all local collections (but you can change selection)
+    try:
+        logger.info(f"Creating chained collection '{chain_name}' that includes existing local collections.")
+        ensure_chained_collection(LOCAL_REPO, chain_name, members=local_collections, logger=logger)
+    except Exception:
+        logger.exception("Could not create or set chained collection.")
+        raise
 
     logger.info("Pipeline finished successfully.")
     return True
 
+
 # Low-level helpers
 # ---------------------------------------------------------------------
-def setup_logger(logfile_path: str, name: str = 'pipeline.log') -> logging.Logger:
-    """Create a logger that writes DEBUG to file and INFO to console."""
-    logger = logging.getLogger(name)
-    logger.setLevel(logging.DEBUG)
-
-    # prevent duplicate handlers
-    if logger.hasHandlers():
-        logger.handlers.clear()
-
-    # Formatter with timestamp
-    formatter = logging.Formatter(
-        fmt="%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S")
-
-    # Log to file
-    file_handler = logging.FileHandler(logfile_path)
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(formatter)
-
-    # Log to console
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
-
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-
-    return logger
-
-def _run(cmd: list[str], logger: logging.Logger = None) -> subprocess.CompletedProcess:
-    """
-    Run a subprocess command, log stdout/stderr and raise if it fails.
-    Returns the CompletedProcess on success.
-    """
-    msg = msg = "[CMD] " + " ".join(cmd)
-    if logger:
-        logger.info(msg)
-    else:
-        print(msg)
-
-    try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        if logger:
-            logger.info(result.stdout.strip())
-            if result.stderr.strip():
-                logger.warning(result.stderr.strip())
-
-    except subprocess.CalledProcessError as e:
-        if logger:
-            logger.error(f"Command failed: {e}")
-            logger.error(e.stderr)
-        else:
-            print("Command failed:", e)
-            print(e.stderr)
-        raise
-
-def get_butler_location(butler: Butler) -> str | bool:
-    """Return repository path for a local Butler or parsed location for remote Butler."""
-    try:
-        return butler.repo   # Local Butler
-    except AttributeError:
-        import re
-        # Remote Butler: parse str(butler)
-        s = str(butler)
-        match = re.search(r"RemoteButler\((.+?)\)", s)
-        if match:
-            return match.group(1)
-        else:
-            return False  # Could not determine location
-
 def create_empty_repo(path: str, logger: logging.Logger = None) -> bool:
     """Create a new local Butler repo (using Butler.makeRepo)."""
     if os.path.exists(os.path.join(path, "butler.yaml")):
@@ -208,10 +174,118 @@ def create_empty_repo(path: str, logger: logging.Logger = None) -> bool:
 
     Butler.makeRepo(path)
     return True
-        
+
+def transfer_all_visit_datasets(
+    remote_repo: str,
+    local_repo: str,
+    visit_id: int,
+    required_present: set[str],
+    optional_present: set[str],
+    instrument: str,
+    band: str,
+    collections: str | list[str],
+    logger: logging.Logger = None
+) -> bool:
+    """
+    Copy all required + optional datasets for a visit.
+    Calls your existing `transfer_visits` function repeatedly.
+    """
+
+    all_types = list(sorted(required_present)) + list(sorted(optional_present))
+    for dt in all_types:
+        if logger:
+            logger.info(f"[TRANSFER] Copying datasetType '{dt}' for visit={visit_id}")
+        transfer_visits(remote_repo=remote_repo, local_repo=local_repo, visits=[visit_id],
+                            band=band, instrument=instrument, collections=collections, dataset=dt, logger=logger)
+    return True
+
 
 # High-level operations
 # ---------------------------------------------------------------------
+def discover_datasets_for_visit(
+        REMOTE_REPO: str,
+        datasetRef: DatasetRef,
+        optional: bool = True,
+        logger: logging.Logger = None) -> dict:
+    """
+    Identify all datasetTypes available for a visit in the remote repo.
+    Returns a dictionary: {'required_present': set[str], 'optional_present': set[str], 'missing_required': set[str], 'missing_optional': set[str],}
+    """
+
+    required_set = {
+        "visit_summary", "visit_summary_schema", "visit_summary_metadata",
+        "calexp", "calexp_metadata", "calexp_background", "calexp_psf", "calexp_wcs", "calexp_noise",
+        "raw", "postISRCCD", "visit_image"
+    }
+
+    optional_set = {
+        "postISRCCD", "postISRCCD_metadata", "calexp_background_model",
+        "src", "src_schema", "src_schema_validity", "srcMatches", "srcMatchFull"
+    }
+
+    try:
+        if logger:
+            logger.info(f"Getting the remote Butler registry on: {REMOTE_REPO}.")
+        remote = Butler(REMOTE_REPO).registry
+        dt_available = {dt.name: dt for dt in remote.queryDatasetTypes()}
+        collections = remote.queryCollections()  # Cache collections
+    except Exception as e:
+        if logger:
+            logger.exception(f"Could not have access to Butler registry on: {REMOTE_REPO}")
+            logger.error(f"Command failed: {e}")
+        raise
+
+    out_dic = {
+        'required_present': set(),
+        'optional_present': set(),
+        'missing_required': set(),
+        'missing_optional': set(),
+    }
+    visit_dataId = datasetRef.dataId
+
+    # Required datasets
+    for dt_name in required_set:
+        if dt_name not in dt_available:
+            out_dic['missing_required'].add(dt_name)
+            continue
+        
+        refs = list(remote.queryDatasets(
+            dt_available[dt_name],
+            dataId=visit_dataId,
+            collections=collections
+        ))
+
+        if refs:
+            out_dic['required_present'].add(dt_name)
+        else:
+            out_dic['missing_required'].add(dt_name)
+
+    # Optional datasets
+    if optional:
+        for dt_name in optional_set:
+            if dt_name not in dt_available:
+                out_dic['missing_optional'].add(dt_name)
+                continue
+
+            refs = list(remote.queryDatasets(
+                dt_available[dt_name],
+                dataId=visit_dataId,
+                collections=collections
+            ))
+
+            if refs:
+                out_dic['optional_present'].add(dt_name)
+            else:
+                out_dic['missing_optional'].add(dt_name)
+
+    if logger:
+        logger.info(f"[DISCOVER] Visit {visit_dataId}")
+        logger.info(f"  Required present : {sorted(out_dic['required_present'])}")
+        logger.info(f"  Missing required : {sorted(out_dic['missing_required'])}")
+        logger.info(f"  Optional present : {sorted(out_dic['optional_present'])}")
+        logger.info(f"  Missing optional : {sorted(out_dic['missing_optional'])}")
+
+    return out_dic
 
 def instrument_register_from_remote(
     local_repo: str,
@@ -247,9 +321,8 @@ def instrument_register_from_remote(
 
     found_names = {rec.name for rec in remote_inst_records}
     missing = instruments - found_names
-    if missing:
-        if logger:
-            logger.warning(f"Some instruments not found in remote registry: {sorted(missing)}")
+    if missing and logger:
+        logger.warning(f"Some instruments not found in remote registry: {sorted(missing)}")
         # still continue with those found; you can choose to raise instead
 
     # Full instrument class names (e.g., lsst.obs.lsst.LsstCam)
@@ -314,117 +387,133 @@ def register_datasetTypes(local_repo: str,
     return True
 
 def skymap_register_from_remote(
-    local_repo: str,
     remote_repo: str,
-    collections: str = "LSSTComCam/DP1",
-    HSCskymap: bool = False,
-    OBS_DECAM_DIR: bool = False,
-    logger: logging.Logger = None
-) -> bool:
+    local_repo: str,
+    remote_collections: str | list[str] = "LSSTComCam/DP1",
+    logger: logging.Logger = None) -> bool:
     """
-    Register skymap(s) from remote into local repo.
-
-    Parameters
-    ----------
-    local_repo : str
-        Path to the local Butler repository where the SkyMap will be registered.
-    remote_repo : str
-        Path to the remote repository from which the SkyMap definition will be taken.
-    collections : str, optional
-        Collection to use when querying the remote repository for SkyMap dimension
-        records (default: "LSSTComCam/DP1").
-    HSCskymap : bool, optional
-        If True, also register the HSC rings skymap (default: False).
-    OBS_DECAM_DIR : bool, optional
-        If True, use the `makeSkyMap.py` from `OBS_DECAM_DIR` environment variable (default: False).
-
-    Returns
-    -------
-    bool
-        True if registration succeeded.
+    1) Detect SkyMap dimension record.
+    2) Find which RUN actually contains the skyMap dataset.
+    3) Copy it using 'butler transfer-datasets' (preserves UUIDs).
     """
+    # Normalize input
+    if isinstance(remote_collections, str):
+        remote_collections = [remote_collections]
 
-    # Load remote repo
-    remote = Butler(remote_repo, collections=collections)
+    # Open remote repo
+    remote = Butler(remote_repo, collections=remote_collections)
 
-    # Query skymaps
-    skymaps = list(remote.registry.queryDimensionRecords("skymap"))
-    if not skymaps:
-        raise RuntimeError("The remote repository has no SkyMap registered.")
+    # SkyMap DIMENSION RECORD
+    skymap_dimrecs = list(remote.registry.queryDimensionRecords("skymap"))
+    if not skymap_dimrecs:
+        raise RuntimeError(
+            f"Remote repo '{remote_repo}' contains the 'skymap' dimension "
+            "but no SkyMap records are stored in the given collections."
+        )
 
-    if len(skymaps) > 1 and logger:
-        logger.warning(f"Multiple SkyMaps found in remote; using first: {skymaps[0].name}")
+    skymap_name = skymap_dimrecs[0].name
+    if logger: logger.info(f"[SKYMAP] SkyMap dimension found: {skymap_name}")
 
-    skymap_name = skymaps[0].name
-    if logger:
-        logger.info(f"Detected remote SkyMap: {skymap_name}")
+    # FIND ACTUAL SKYMAP DATASET (search all collections)
+    all_remote_collections = list(remote.registry.queryCollections())
+    found_refs = []
+    for coll in all_remote_collections:
+        try:
+            refs = list(remote.registry.queryDatasets(
+                datasetType="skyMap", dataId={"skymap": skymap_name}, collections=coll))
+            if refs:
+                found_refs.extend(refs)
+                if logger: logger.info(f"[SKYMAP] Found skyMap dataset in collection: {coll}")
+        except Exception:
+            # ignore incompatible collections
+            pass
 
-    # DECam skymap logic
-    if OBS_DECAM_DIR:
-        if "OBS_DECAM_DIR" not in os.environ:
-            raise RuntimeError("OBS_DECAM_DIR is required but not set.")
-        run_config = os.path.join(os.environ["OBS_DECAM_DIR"], "config/makeSkyMap.py")
-        _run(["butler", "register-skymap", local_repo, "-C", run_config, "-c", f"name='{skymap_name}'"], logger=logger)
-    else:
-        _run(["butler", "register-skymap", local_repo, "-c", f"name='{skymap_name}'"], logger=logger)
+    if not found_refs:
+        raise RuntimeError(
+            "SkyMap DimensionRecord exists, BUT no actual skyMap dataset exists "
+            "in any collection of the remote repository."
+        )
 
-    # Optional: register HSC skymap
-    if HSCskymap:
-        if "OBS_SUBARU_DIR" not in os.environ:
-            raise RuntimeError("OBS_SUBARU_DIR is required for HSC skymap but not set.")
-        hsc_config = os.path.join(os.environ["OBS_SUBARU_DIR"], "config/makeSkyMap.py")
-        _run(["butler", "register-skymap", local_repo, "-C", hsc_config, "-c", "name='hsc_rings_v1'"], logger=logger)
+    run_name = found_refs[0].run
+    if logger: logger.info(f"[SKYMAP] SkyMap dataset stored in RUN: {run_name}")
+        
+    # TRANSFER SKYMAP DATASET
+    cmd = ["butler", "transfer-datasets", remote_repo, local_repo, "--dataset-type", "skyMap", "--collections", run_name]
 
-    if logger:
-        logger.info(f"SkyMap '{skymap_name}' registered successfully.")
-    if logger and OBS_DECAM_DIR:
-        logger.info("[OK] DECam skymap logic registered.")
-    if logger and HSCskymap:
-        logger.info("[OK] Additional HSC ring skymap registered.")
-    
+    if logger: logger.info("[CMD] " + " ".join(cmd))
+    subprocess.run(cmd, check=True)
+    if logger: logger.info("[SKYMAP] SkyMap successfully transferred.")
+
     return True
 
-def transfer_visits(
-    remote_repo: str,
-    local_repo: str,
-    visits: list[int] | int,
-    band: str,
-    instrument: str = 'LSSTComCam',
-    detector: int | list[int] = None,
-    day_obs: int | list[int] = None,
-    physical_filter: str = None,
-    skymap: str = None,
-    collections: str | list[str] = None,
-    dataset: str = None,
-    logger: logging.Logger = None,
-) -> bool:
+def ensure_chained_collection(
+        local_repo: str,
+        chain_name: str,
+        members: list[str],
+        logger: logging.Logger = None) -> bool:
     """
-    Transfer one-or-more visits from remote_repo to local_repo via `butler transfer-datasets`.
+    Creation/update of a CHAINED collection:
+      - Avoids inserting the chain into itself
+      - Avoids ingest/transfer/curated/other system collections
+    """
+    reg = Butler(local_repo, writeable=True).registry
+
+    # Create chain if it does not exist
+    if chain_name not in reg.queryCollections():
+        reg.registerCollection(chain_name, CollectionType.CHAINED)
+        if logger: logger.info(f"Registered CHAINED collection: {chain_name}")
+
+    # Filter dangerous or irrelevant collections
+    safe_members = []
+    for m in members:
+        if m == chain_name:  # Never include the chain itself
+            continue
+        if m.startswith("ingest") or m.startswith("transfer") or m.startswith("_"):  # Skip system collections
+            continue
+        if "butler" in m.lower():  # Skip curated/registry internals
+            continue
+        safe_members.append(m)
+
+    # Apply chain
+    reg.setCollectionChain(chain_name, safe_members)
+    if logger:
+        logger.info(f"Set chain for '{chain_name}' -> {safe_members}")
+    return True
+
+def transfer_visits(remote_repo: str,
+                        local_repo: str,
+                        visits: list[int] | int,
+                        band: str, instrument: str,
+                        detector=None,
+                        day_obs=None,
+                        physical_filter=None, skymap=None,
+                        collections: str | list[str] = None,
+                        dataset: str = None,
+                        logger: logging.Logger = None) -> bool:
+    """
+    Transfer (use CLI 'butler transfer-datasets' to preserve UUIDs)
+    one-or-more visits from remote_repo to local_repo via `butler transfer-datasets`.
     `visits` may be a single int or an iterable of ints.
 
     Returns:
         bool: True if the transfer completed successfully.
     """
+    # Build where clause
     if isinstance(visits, int):
         visits_list = [visits]
     else:
         visits_list = list(visits)
-    
+
     if not visits_list:
         raise ValueError("No visits provided to transfer_visits().")
     elif logger:
         logger.info("[INFO] Transferring visits...")
 
-    # Convert collections list to comma-separated string if necessary
-    if isinstance(collections, (list, tuple, set)):
-        collections = ",".join(collections)
-
     # Create visit IDs string
-    visit_ids_str = "(" + ",".join(map(str, visits)) + ")"
+    visit_ids_str = "(" + ",".join(map(str, visits_list)) + ")"
 
     # Build the query parts
     query_parts = [f"instrument='{instrument}'", f"visit IN {visit_ids_str}", f"band='{band}'"]
-
     if detector is not None:
         if isinstance(detector, (list, tuple, set)):
             det_str = "(" + ",".join(map(str, detector)) + ")"
@@ -441,25 +530,29 @@ def transfer_visits(
 
     if physical_filter:
         query_parts.append(f"physical_filter='{physical_filter}'")
+
     if skymap:
         query_parts.append(f"skymap='{skymap}'")
-
     query_string = " AND ".join(query_parts)
 
     # Build the command
-    cmd = [
-        "butler", "transfer-datasets",
-        remote_repo, local_repo,
-        "--where", query_string,]
+    cmd = ["butler", "transfer-datasets", remote_repo, local_repo, "--where", query_string]
+
     if collections:
-        cmd.extend(["--collections", collections])
+        if isinstance(collections, (list, tuple, set)):
+            collections_str = ",".join(collections)
+        else:
+            collections_str = collections
+        cmd.extend(["--collections", collections_str])
+
     if dataset:
         cmd.extend(["--dataset-type", dataset])
 
-    # Run the command
     _run(cmd, logger=logger)
     if logger:
-        logger.info(f"Completed transfer for visits {visits_list}")
+        logger.info(f"Completed transfer-datasets for dataset={dataset}, visits={visit_ids_str}")
     return True
+
+
 
 

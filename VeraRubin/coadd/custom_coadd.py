@@ -11,9 +11,43 @@ from lsst.pipe.base import Pipeline
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from visit.visit import Visit, combine_visits_selected
 from sky.sky import tract_patch
-from plot.visit_plot import filt_plot
+from plot.butler_plot import filt_plot
 
 ###################################################################################################
+
+# Low-level helpers
+# ---------------------------------------------------------------------
+def load_custom_coadd_from_file(info_txt_path):
+    """
+    Load custom coadd Butler using information from a text file.
+    """
+    from butler.butler import ExpButler
+
+    with open(info_txt_path, "r") as f:
+        info = json.load(f)
+
+    butler = ExpButler(repository=info['repo_path'], collections=info['collection'])._create_butler()
+
+    results = {}
+    for band in info['bands']:
+        try:
+            coadd = butler.get(
+                info['coadd_type'],
+                tract=info['tract'],
+                patch=int(info['patch']),
+                band=band,
+                instrument=info['instrument'],
+                skymap=info['skymap'],
+                collections=info['collection']
+            )
+            results[band] = coadd
+        except Exception as e:
+            print(f"[WARNING] Could not load coadd for band {band}: {e}")
+
+    return results
+
+# higher-level helpers
+# ---------------------------------------------------------------------
 def custom_coadd_filter(loc_data, bands='ugrizy', sky_coordinates=True, repository="dp1",
                         collections="LSSTComCam/DP1", butler=None,
                         type_coadd='deep_coadd',
@@ -130,7 +164,6 @@ def custom_coadd_filter(loc_data, bands='ugrizy', sky_coordinates=True, reposito
         )
         return visits_selected_list, df_metrics_list, None
 
-
 def custom_coadd_multiband(butler, visits_selected, loc_data,
                            my_collection_identifier='custom_coadd',
                            repo_name='local_repo', bands=None, info=True, out=True,
@@ -190,6 +223,7 @@ def custom_coadd_multiband(butler, visits_selected, loc_data,
     # The DP1 dataset available to users does not contain all intermediate data products.
     # To work around this, use pipeline configuration overrides to ensure that custom coaddition 
     # will draw needed metadata information directly from the calibrated exposures rather than other intermediate products
+    # https://pipelines.lsst.io/modules/lsst.pipe.tasks/tasks/lsst.pipe.tasks.make_direct_warp.MakeDirectWarpTask.html
     pipeline.addConfigOverride('makeDirectWarp', 'useVisitSummaryPsf', False)
     pipeline.addConfigOverride('makeDirectWarp', 'useVisitSummaryPhotoCalib', False)
     pipeline.addConfigOverride('makeDirectWarp', 'useVisitSummaryWcs', False)
@@ -299,32 +333,3 @@ def custom_coadd_multiband(butler, visits_selected, loc_data,
         print(f"[INFO] Coadd pipeline completed, results saved.")
 
     return None
-
-def load_custom_coadd_from_file(info_txt_path):
-    """
-    Load custom coadd Butler using information from a text file.
-    """
-    from butler.butler import ExpButler
-
-    with open(info_txt_path, "r") as f:
-        info = json.load(f)
-
-    butler = ExpButler(repository=info['repo_path'], collections=info['collection'])._create_butler()
-
-    results = {}
-    for band in info['bands']:
-        try:
-            coadd = butler.get(
-                info['coadd_type'],
-                tract=info['tract'],
-                patch=int(info['patch']),
-                band=band,
-                instrument=info['instrument'],
-                skymap=info['skymap'],
-                collections=info['collection']
-            )
-            results[band] = coadd
-        except Exception as e:
-            print(f"[WARNING] Could not load coadd for band {band}: {e}")
-
-    return results
