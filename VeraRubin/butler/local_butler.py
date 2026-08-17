@@ -285,6 +285,7 @@ def register_datasetTypes(local_repo: str,
             if logger:
                 logger.debug(f"DatasetType '{dt.name}' already registered — skipping.")
             continue
+        dt = dt.conform_to(lbutler.dimensions)
         lreg.registerDatasetType(dt)
         if logger:
             logger.info(f"Registered DatasetType: {dt.name}")
