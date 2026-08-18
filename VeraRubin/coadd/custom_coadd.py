@@ -6,7 +6,7 @@ import json
 import pandas
 from lsst.daf.butler import Butler
 
-from lsst.ctrl.mpexec import SimplePipelineExecutor
+from lsst.pipe.base.simple_pipeline_executor import SimplePipelineExecutor
 from lsst.pipe.base import Pipeline
 
 # Add the project root to the Python path
@@ -113,6 +113,7 @@ def custom_coadd_filter(loc_data: tuple,
             filt_cut=filt_cut.get(band),
             n_visits=n_visits.get(band)
         )
+
         if plot:
             filt_plot(df_metrics, visits_selected, filt_cut.get(band),
               incr=1000, save=False)
@@ -173,6 +174,10 @@ def custom_coadd_multiband(BUTLER_PATH: str,
     pipeline.addConfigOverride('makeDirectWarp', 'useVisitSummaryPsf', False)
     pipeline.addConfigOverride('makeDirectWarp', 'useVisitSummaryPhotoCalib', False)
     pipeline.addConfigOverride('makeDirectWarp', 'useVisitSummaryWcs', False)
+    # DP1 visit_summary does not contain all PSF-quality fields
+    # expected by PsfWcsSelectImagesTask in v30 (e.g. starEMedian).
+    # Disable the pre-warp detector selection.
+    pipeline.addConfigOverride('makeDirectWarp', 'doSelectPreWarp', False)
     pipeline.addConfigOverride('makeDirectWarp', 'connections.calexp_list', 'visit_image')
 
     # Bands auto-detection
