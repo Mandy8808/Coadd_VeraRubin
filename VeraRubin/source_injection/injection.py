@@ -183,19 +183,21 @@ def create_crowded_injection_catalog(
     for i in range(n_sources):
         ra_i, dec_i = ra_list[i], dec_list[i]
         too_close = False
+
+        if min_sep is not None:
         
-        # Compare this source to all previously accepted ones
-        for src in accepted:
-            if separation_spherical:
-                sep = SkyCoord(ra_i*u.deg, dec_i*u.deg).separation(
-                    SkyCoord(src['ra']*u.deg, src['dec']*u.deg)
-                ).deg
-            else:
-                sep = np.sqrt((ra_i - src['ra'])**2 + (dec_i - src['dec'])**2)  # Approximation valid for small separations
-            
-            if sep < min_sep:
-                too_close = True
-                break
+            # Compare this source to all previously accepted ones
+            for src in accepted:
+                if separation_spherical:
+                    sep = SkyCoord(ra_i*u.deg, dec_i*u.deg).separation(
+                        SkyCoord(src['ra']*u.deg, src['dec']*u.deg)
+                    ).deg
+                else:
+                    sep = np.sqrt((ra_i - src['ra'])**2 + (dec_i - src['dec'])**2)  # Approximation valid for small separations
+                
+                if sep < min_sep:
+                    too_close = True
+                    break
         
         if not too_close:
             accepted.append({
@@ -204,6 +206,7 @@ def create_crowded_injection_catalog(
                 "mag": mags[i],
                 "stamp": stamp_paths[i]
             })
+    print(accepted)
 
     # Return an empty table if no sources are accepted
     if not accepted:
@@ -212,6 +215,8 @@ def create_crowded_injection_catalog(
     # Try using LSST's generate_injection_catalog
     try:
         cat_list = []
+        if min_sep == None:
+            min_sep=0.00000001
         for idx, src in enumerate(accepted):
             ra_lim = [src['ra'] - min_sep/2, src['ra'] + min_sep/2]
             dec_lim = [src['dec'] - min_sep/2, src['dec'] + min_sep/2]
@@ -580,7 +585,8 @@ def main_inject_stamp(
         visit_name="visit_image",
         rot_name_save="stamp_rotated",
         remove_rotated_stamps=True,
-        info=True):
+        info=True,
+        ref_wcs=None):
     """
     Inject artificial sources (stamps) into multiple LSST visit images.
 
@@ -613,8 +619,9 @@ def main_inject_stamp(
         Restrict to specific visit IDs.
     num_select : int, optional
         Limit the number of visits selected (after sorting by SNR).
-    min_sep : float, optional
-        Minimum separation between injected sources [deg]. Default = 0.0005.
+    min_sep : float or None, optional
+        Minimum separation between injected sources [deg]. Default = 0.0005. 
+        If None stamp in the same position is posible.
     separation_spherical : bool, optional
         If True, use spherical separation for spacing. Otherwise, Euclidean.
     from_data : bool
@@ -632,6 +639,9 @@ def main_inject_stamp(
         Set to False to keep them for inspection.
     info : bool, optional
         Print debug info.
+    ref_wcs : lsst.afw.geom.SkyWcs
+        Wcs used as reference to rotate stamps, recomended if working with
+        multiple bands if None the first visit is used as reference.
 
     Returns
     -------
@@ -719,7 +729,8 @@ def main_inject_stamp(
     if info_save_path: table_info['snr'] = sorter_snr
 
     # Compute relative rotation angles w.r.t first visit
-    ref_wcs = sort_getWcs_list[0]  # referential visit
+    if ref_wcs is None:
+        ref_wcs = sort_getWcs_list[0]  # referential visit
     rotation_angle_list = [0.0]  # reference visit has 0 rotation
     rotation_angle_list.extend([
         wcs.getRelativeRotationToWcs(ref_wcs).asDegrees()
@@ -752,6 +763,7 @@ def main_inject_stamp(
             )
             for j, stamp_file in enumerate(stamp_paths)
         ]  # [rotate_stamp1_path, rotate_stamp2_path, ...]
+        print(rotated_stamps_path)
         if info_save_path: table_info[f'rotated stamps path angle {str(angle)}'] = rotated_stamps_path
 
         # Create injection catalog
@@ -762,6 +774,7 @@ def main_inject_stamp(
             mags,
             min_sep=min_sep,
             separation_spherical=separation_spherical
+            
         )
 
         # Perform injection
