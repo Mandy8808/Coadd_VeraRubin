@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "VeraRubin"
+version = "0.1.0"
+description = "The goal of this project is to develop diagnostic tools in order to validate the upcoming LSST observations for strong lensing source detection"
+requires-python = ">=3.9"
+
+dependencies = [
+    "numpy",
+    "matplotlib"
+]
+
+[tool.setuptools.packages.find]
+include = [
+    "VeraRubin"
+]
